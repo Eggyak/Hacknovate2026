@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
-  db, divisions, permissions, seedDatabase, toRole, toUser, toTicket,
+  db, divisions, permissions, accessLevelPermissionGrants, seedDatabase, toRole, toUser, toTicket,
   getUserById, getRoleById, publicUserQuery, userByEmail, rolesList, wardsList,
   usersList, userDirectoryList, eventsList, ticketById, getWardById,
 } from './db.js';
@@ -26,12 +26,24 @@ function requireAuth(req,res,next){const user=sessionUser(req);if(!user)return r
 function requirePermission(permission){return (req,res,next)=>{if(!req.role.permissions.includes(permission))return res.status(403).json({error:`The ${permission} permission is required.`});next();};}
 function requireSuperAdmin(req,res,next){if(req.user.roleId!=='ROLE-SUPER-ADMIN')return res.status(403).json({error:'Super Admin access is required.'});next();}
 function allowedWardIds(req){if(req.role.scopeType!=='WARD')return [];const assigned=req.user.assignedWards;if(req.role.wardIds?.length)return assigned.filter(id=>req.role.wardIds.includes(id));return assigned;}
-function ticketScope(req){const clauses=[];const params=[];if(req.role.scopeType==='DIVISION'){clauses.push('division_id=?');params.push(req.role.divisionId);}if(req.role.scopeType==='WARD'){const ids=allowedWardIds(req);if(!ids.length)clauses.push('1=0');else{clauses.push(`ward_id IN (${ids.map(()=>'?').join(',')})`);params.push(...ids);}}if(req.role.divisionId){clauses.push('division_id=?');params.push(req.role.divisionId);}if(req.role.accessLevel==='APPELLATE_AUTHORITY')clauses.push("json_extract(payload_json,'$.appealStatus')='APPEALED'");return {sql:clauses.length?` WHERE ${clauses.join(' AND ')}`:'',params};}
-function canSeeTicket(req,ticket){if(!req.role.permissions.includes('tickets:read'))return false;if(req.role.scopeType==='WARD'&&!allowedWardIds(req).includes(ticket.ward_id))return false;if(req.role.scopeType==='DIVISION'&&req.role.divisionId!==ticket.division_id)return false;if(req.role.divisionId&&req.role.divisionId!==ticket.division_id)return false;if(req.role.accessLevel==='APPELLATE_AUTHORITY'&&JSON.parse(ticket.payload_json).appealStatus!=='APPEALED')return false;return req.role.scopeType==='GLOBAL'||req.role.scopeType==='DIVISION'||req.role.scopeType==='WARD';}
+function ticketScope(req){const clauses=[];const params=[];if(req.user.roleId!=='ROLE-SUPER-ADMIN'&&req.role.scopeType==='GLOBAL')clauses.push('1=0');if(req.role.scopeType==='DIVISION'){if(!req.role.divisionId)clauses.push('1=0');else{clauses.push('division_id=?');params.push(req.role.divisionId);}}if(req.role.scopeType==='WARD'){const ids=allowedWardIds(req);if(!ids.length)clauses.push('1=0');else{clauses.push(`ward_id IN (${ids.map(()=>'?').join(',')})`);params.push(...ids);}}if(req.role.divisionId){clauses.push('division_id=?');params.push(req.role.divisionId);}if(req.role.accessLevel==='APPELLATE_AUTHORITY')clauses.push("json_extract(payload_json,'$.appealStatus')='APPEALED'");return {sql:clauses.length?` WHERE ${clauses.join(' AND ')}`:'',params};}
+function canSeeTicket(req,ticket){if(!req.role.permissions.includes('tickets:read'))return false;if(req.user.roleId!=='ROLE-SUPER-ADMIN'&&req.role.scopeType==='GLOBAL')return false;if(req.role.scopeType==='WARD'&&!allowedWardIds(req).includes(ticket.ward_id))return false;if(req.role.scopeType==='DIVISION'&&(!req.role.divisionId||req.role.divisionId!==ticket.division_id))return false;if(req.role.divisionId&&req.role.divisionId!==ticket.division_id)return false;if(req.role.accessLevel==='APPELLATE_AUTHORITY'&&JSON.parse(ticket.payload_json).appealStatus!=='APPEALED')return false;return req.role.scopeType==='GLOBAL'||req.role.scopeType==='DIVISION'||req.role.scopeType==='WARD';}
 const sensitiveKeys=new Set(['details','evidence','attachments','transactionId','utrNumber','amountLost','stolenAmount','fraudDateTime','fraudDateTimeLocal','platformUsed','targetPlatform','suspectDetails','upiId','fraudsterPhone','bankAccountNumber','passportNumber','applicationReferenceNumber','visaOciReference','nationality','countryOfOrigin','visaType','issueDate','expiryDate','aadhaarNumber','bankAccountDetails','disasterName','damageCategory','lossCategory','specificUt','targetUtName','civicDepartment','wardOrZoneNumber','localityNumber','propertyId','ppoNumber','bankBranch','ifsc','freedomFighterName','primaryBeneficiary','sanctionDate','forceName','officerName','officerRank','badgeNumber','incidentLocation','misconductType','ngoName','fcraRegistrationNumber','fcraLicenseNumber','headquarterState','registrationDistrict','remittanceDetails','foreignRemittanceDetails','violationNature','threatLevel','suspectUrl','suspectWebsite','armsLicenseNumber','tipOffDetails','suspectOrganization','supportingEvidence']);
-const rolePermissionGrants={SUPER_ADMIN:permissions,DIVISION_ADMIN:['tickets:read','tickets:resolve','tickets:reroute','analytics:view'],L1_RESOLVING_OFFICER:['tickets:read','tickets:resolve','tickets:reroute'],APPELLATE_AUTHORITY:['tickets:read','tickets:resolve','analytics:view'],OTHER_CASE_TRIAGE:['tickets:read','tickets:reroute']};
 function scrubDynamic(value){if(Array.isArray(value))return value.map(scrubDynamic);if(!value||typeof value!=='object')return value;return Object.fromEntries(Object.entries(value).filter(([key])=>!sensitiveKeys.has(key)).map(([key,item])=>[key,scrubDynamic(item)]));}
-function ticketForRole(row,req){const ticket=toTicket(row);if(!ticket||req.role.accessLevel==='SUPER_ADMIN'||(req.role.divisionId&&req.role.divisionId===ticket.divisionId))return ticket;return scrubDynamic(ticket);}
+function ticketForRole(row,req){const ticket=toTicket(row);if(!ticket||req.user.roleId==='ROLE-SUPER-ADMIN'||(req.role.divisionId&&req.role.divisionId===ticket.divisionId))return ticket;return scrubDynamic(ticket);}
+function scopedActivities(req){
+  const rows=eventsList.all();
+  if(req.user.roleId==='ROLE-SUPER-ADMIN')return rows.map(row=>activityJson(row));
+  const divisionId=req.role.divisionId;
+  return rows.filter(row=>{
+    if(req.role.accessLevel==='L1_RESOLVING_OFFICER')return row.user_id===req.user.id;
+    if(req.role.accessLevel==='APPELLATE_AUTHORITY')return Boolean(row.ticket_division_id===divisionId&&row.ticket_appealed);
+    if(req.role.accessLevel==='OTHER_CASE_TRIAGE')return row.ticket_division_id==='OTHER_TRIAGE'||row.actor_division_id==='OTHER_TRIAGE';
+    return Boolean(divisionId&&(row.ticket_division_id===divisionId||row.actor_division_id===divisionId||safeJson(row.details_json).divisionId===divisionId));
+  }).map(row=>activityJson(row));
+}
+const safeJson=value=>{try{return JSON.parse(value??'{}');}catch{return {};}};
+const activityJson=row=>({id:row.id,userId:row.user_id,ticketId:row.ticket_id,grievanceId:row.grievance_id,actorName:row.actor_name,type:row.event_type,summary:row.summary,details:safeJson(row.details_json),createdAt:row.created_at});
 function audit(userId,type,summary,ticketId=null,details={}){db.prepare('INSERT INTO activity_events(user_id,ticket_id,event_type,summary,details_json,created_at) VALUES(?,?,?,?,?,?)').run(userId,ticketId,type,summary,JSON.stringify(details),new Date().toISOString());}
 const publicAccount=row=>({id:row.id,name:row.name,email:row.email,mobileNumber:row.mobile_number,roleId:row.role_id,assignedWards:JSON.parse(row.assigned_wards_json),isActive:Boolean(row.is_active),avatarInitials:row.avatar_initials,...(row.last_sign_in?{lastSignIn:row.last_sign_in}:{}),...(row.password_reset_at?{passwordResetAt:row.password_reset_at}:{})});
 const userRole=(user)=>toRole(getRoleById.get(user.roleId));
@@ -63,9 +75,9 @@ app.post('/api/auth/change-password',requireAuth,(req,res)=>{const current=Strin
 app.post('/api/auth/forgot-password',(req,res)=>{const email=String(req.body?.email??'').trim().toLowerCase();if(email.length>254||!/^\S+@\S+\.\S+$/.test(email))return res.status(400).json({error:'Enter a valid department email.'});const row=userByEmail.get(email);if(row?.is_active)audit(row.id,'PASSWORD_RECOVERY_REQUESTED','Password recovery requested.');res.json({message:'If this active account exists, a password reset request has been recorded. Contact your Super Admin to issue a new temporary password.'});});
 
 app.get('/api/bootstrap',requireAuth,(req,res)=>{
-  const scope=ticketScope(req);const tickets=db.prepare(`SELECT * FROM tickets${scope.sql} ORDER BY submission_timestamp DESC LIMIT 500`).all(...scope.params).map(row=>ticketForRole(row,req));
+  const scope=ticketScope(req);const tickets=req.role.permissions.includes('tickets:read')?db.prepare(`SELECT * FROM tickets${scope.sql} ORDER BY submission_timestamp DESC LIMIT 500`).all(...scope.params).map(row=>ticketForRole(row,req)):[];
   const roles=req.user.roleId==='ROLE-SUPER-ADMIN'?rolesList.all().map(toRole):[req.role];const wards=wardsList.all();const users=req.user.roleId==='ROLE-SUPER-ADMIN'?usersList.all().map(publicAccount):[];
-  const activities=req.role.permissions.includes('analytics:view')?eventsList.all().map(row=>({id:row.id,userId:row.user_id,ticketId:row.ticket_id,grievanceId:row.grievance_id,actorName:row.actor_name,type:row.event_type,summary:row.summary,details:JSON.parse(row.details_json),createdAt:row.created_at})):[];
+  const activities=req.role.permissions.includes('analytics:view')?scopedActivities(req):[];
   res.json({user:req.user,role:req.role,tickets,roles,users,wards,activities});
 });
 app.get('/api/tickets',requireAuth,requirePermission('tickets:read'),(req,res)=>{const scope=ticketScope(req);res.json(db.prepare(`SELECT * FROM tickets${scope.sql} ORDER BY submission_timestamp DESC LIMIT 500`).all(...scope.params).map(row=>ticketForRole(row,req)));});
@@ -87,7 +99,7 @@ app.post('/api/intake/grievances',intakeLimiter,(req,res)=>{
 app.patch('/api/tickets/:id',requireAuth,(req,res)=>{
   const current=ticketById.get(req.params.id);if(!current||!canSeeTicket(req,current))return res.status(404).json({error:'Grievance not found in your scope.'});
   if(req.body?.routeToDivisionId){
-    if(req.role.accessLevel!=='OTHER_CASE_TRIAGE'||current.category!=='OTHER')return res.status(403).json({error:'Only the Other Case Triage Officer can route cases from the Other department.'});
+    if(req.role.accessLevel!=='OTHER_CASE_TRIAGE'||!req.role.permissions.includes('tickets:reroute')||current.category!=='OTHER')return res.status(403).json({error:'Only a permitted Other Case Triage Officer can route cases from the Other department.'});
     const destination=divisions.find(([id])=>id===req.body.routeToDivisionId);
     if(!destination||destination[0]==='OTHER_TRIAGE')return res.status(400).json({error:'Choose a valid destination department.'});
     const payload=JSON.parse(current.payload_json);delete payload.details;
@@ -111,11 +123,13 @@ app.post('/api/roles',requireAuth,requireSuperAdmin,(req,res)=>{
   const name=String(req.body?.name??'').trim();const description=String(req.body?.description??'').trim();const scopeType=req.body?.scopeType;const perms=req.body?.permissions;const divisionId=req.body?.divisionId??null;const wardIds=Array.isArray(req.body?.wardIds)?req.body.wardIds:[];
   const accessLevel=['DIVISION_ADMIN','L1_RESOLVING_OFFICER','APPELLATE_AUTHORITY','OTHER_CASE_TRIAGE'].includes(req.body?.accessLevel)?req.body.accessLevel:(scopeType==='WARD'?'L1_RESOLVING_OFFICER':'DIVISION_ADMIN');
   if(accessLevel==='OTHER_CASE_TRIAGE'&&(scopeType!=='DIVISION'||divisionId!=='OTHER_TRIAGE'))return res.status(400).json({error:'Other Case Triage roles must belong to the Other Cases Triage department.'});
-  if(name.length<2||name.length>80||!['GLOBAL','DIVISION','WARD'].includes(scopeType)||!Array.isArray(perms)||perms.some(p=>!permissions.includes(p)))return res.status(400).json({error:'Enter a valid role name, scope, and permission list.'});
-  if(perms.some(permission=>!rolePermissionGrants[accessLevel].includes(permission)))return res.status(400).json({error:'This role access level cannot be granted one or more selected permission modules.'});
-  if(scopeType==='DIVISION'&&!divisions.some(([id])=>id===divisionId))return res.status(400).json({error:'Choose a valid MHA division.'});
+  if(name.length<2||name.length>80||!['DIVISION','WARD'].includes(scopeType)||!Array.isArray(perms)||perms.some(p=>!permissions.includes(p)))return res.status(400).json({error:'Custom roles must use a valid division or ward scope and permission list.'});
+  if((['DIVISION_ADMIN','APPELLATE_AUTHORITY','OTHER_CASE_TRIAGE'].includes(accessLevel)&&scopeType!=='DIVISION')||(accessLevel==='L1_RESOLVING_OFFICER'&&scopeType!=='WARD'))return res.status(400).json({error:'Choose a scope that matches the selected access level.'});
+  if(perms.some(permission=>!accessLevelPermissionGrants[accessLevel].includes(permission)))return res.status(400).json({error:'This role access level cannot be granted one or more selected permission modules.'});
+  if((scopeType==='DIVISION'||divisionId)&&!divisions.some(([id])=>id===divisionId))return res.status(400).json({error:'Choose a valid MHA division.'});
+  if(divisionId==='OTHER_TRIAGE'&&accessLevel!=='OTHER_CASE_TRIAGE')return res.status(400).json({error:'The Other Cases Triage department can only use its triage access level.'});
   if(scopeType==='WARD'&&(!wardIds.length||wardIds.some(id=>!getWardById.get(id))))return res.status(400).json({error:'Choose at least one valid ward for this role.'});
-  const id=`ROLE-CUSTOM-${randomUUID()}`;try{db.prepare('INSERT INTO roles(id,name,description,permissions_json,scope_type,division_id,ward_ids_json,is_system,access_level) VALUES(?,?,?,?,?,?,?,0,?)').run(id,name,description,JSON.stringify(perms),scopeType,scopeType==='DIVISION'?divisionId:null,JSON.stringify(scopeType==='WARD'?wardIds:[]),accessLevel);audit(req.user.id,'ROLE_CREATED',`${name} role created.`,null,{scopeType,accessLevel});res.status(201).json(toRole(getRoleById.get(id)));}catch(error){if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'A role with that name already exists.'});throw error;}
+  const id=`ROLE-CUSTOM-${randomUUID()}`;try{db.prepare('INSERT INTO roles(id,name,description,permissions_json,scope_type,division_id,ward_ids_json,is_system,access_level) VALUES(?,?,?,?,?,?,?,0,?)').run(id,name,description,JSON.stringify(perms),scopeType,divisionId||null,JSON.stringify(scopeType==='WARD'?wardIds:[]),accessLevel);audit(req.user.id,'ROLE_CREATED',`${name} role created.`,null,{scopeType,accessLevel});res.status(201).json(toRole(getRoleById.get(id)));}catch(error){if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'A role with that name already exists.'});throw error;}
 });
 app.patch('/api/roles/:id',requireAuth,requireSuperAdmin,(req,res)=>{
   const current=getRoleById.get(req.params.id);if(!current)return res.status(404).json({error:'Role not found.'});
@@ -124,27 +138,33 @@ app.patch('/api/roles/:id',requireAuth,requireSuperAdmin,(req,res)=>{
   const accessLevel=['SUPER_ADMIN','DIVISION_ADMIN','L1_RESOLVING_OFFICER','APPELLATE_AUTHORITY','OTHER_CASE_TRIAGE'].includes(req.body?.accessLevel)?req.body.accessLevel:current.access_level;
   if(accessLevel==='SUPER_ADMIN'&&current.id!=='ROLE-SUPER-ADMIN')return res.status(400).json({error:'Only the protected Staff Admin role can have Super Admin access.'});
   if(accessLevel==='OTHER_CASE_TRIAGE'&&current.division_id!=='OTHER_TRIAGE')return res.status(400).json({error:'Other Case Triage access is limited to the Other Cases Triage department.'});
-  if(perms.some(permission=>!rolePermissionGrants[accessLevel].includes(permission)))return res.status(400).json({error:'This role access level cannot be granted one or more selected permission modules.'});
+  if(current.division_id==='OTHER_TRIAGE'&&accessLevel!=='OTHER_CASE_TRIAGE')return res.status(400).json({error:'The Other Cases Triage department can only use its triage access level.'});
+  if((['DIVISION_ADMIN','APPELLATE_AUTHORITY','OTHER_CASE_TRIAGE'].includes(accessLevel)&&current.scope_type!=='DIVISION')||(accessLevel==='L1_RESOLVING_OFFICER'&&current.scope_type!=='WARD'))return res.status(400).json({error:'The role scope does not match the selected access level.'});
+  if(perms.some(permission=>!accessLevelPermissionGrants[accessLevel].includes(permission)))return res.status(400).json({error:'This role access level cannot be granted one or more selected permission modules.'});
   try{db.prepare('UPDATE roles SET name=?,description=?,permissions_json=?,access_level=? WHERE id=?').run(name,description,JSON.stringify([...new Set(perms)]),accessLevel,current.id);audit(req.user.id,'ROLE_UPDATED',`${name} permissions updated.`,null,{roleId:current.id,accessLevel});res.json(toRole(getRoleById.get(current.id)));}catch(error){if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'A role with that name already exists.'});throw error;}
 });
 
 app.get('/api/users',requireAuth,requireSuperAdmin,(_req,res)=>res.json(userDirectoryList.all().map(publicAccount)));
 app.post('/api/users',requireAuth,requireSuperAdmin,(req,res)=>{
   const name=String(req.body?.name??'').trim();const email=String(req.body?.email??'').trim().toLowerCase();const mobile=String(req.body?.mobileNumber??'').trim();const role=getRoleById.get(String(req.body?.roleId??''));const assigned=Array.isArray(req.body?.assignedWards)?req.body.assignedWards:[];
-  if(name.length<2||name.length>100||!/^\S+@\S+\.\S+$/.test(email)||email.length>254||mobile.length<7||mobile.length>30||!role)return res.status(400).json({error:'Enter valid user details and choose a role.'});
-  const roleObj=toRole(role);if(roleObj.scopeType==='WARD'&&(!assigned.length||assigned.some(id=>!roleObj.wardIds.includes(id))))return res.status(400).json({error:'Select only wards included in the assigned role.'});
+  if(name.length<2||name.length>100||!/^\S+@\S+\.\S+$/.test(email)||email.length>254||mobile.length<7||mobile.length>30||!role||role.id==='ROLE-SUPER-ADMIN')return res.status(400).json({error:'Enter valid user details and choose a staff role.'});
+  if(role.id==='ROLE-SUPER-ADMIN')return res.status(400).json({error:'Staff accounts cannot be assigned the protected Staff Admin role.'});
+  const roleObj=toRole(role);if(roleObj.scopeType==='WARD'&&(!assigned.length||assigned.some(id=>!getWardById.get(id)||(roleObj.wardIds?.length&&!roleObj.wardIds.includes(id)))))return res.status(400).json({error:'Select at least one ward allowed by the assigned role.'});
   const id=`USER-${randomUUID()}`;const initials=name.split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();const password=randomBytes(12).toString('base64url');const hashPassword=bcrypt.hashSync(password,12);
   try{db.prepare('INSERT INTO users(id,name,email,mobile_number,password_hash,role_id,assigned_wards_json,is_active,avatar_initials,must_change_password) VALUES(?,?,?,?,?,?,?,?,?,1)').run(id,name,email,mobile,hashPassword,roleObj.id,JSON.stringify(roleObj.scopeType==='WARD'?assigned:[]),1,initials);audit(req.user.id,'USER_CREATED',`${name} account created.`,null,{roleId:roleObj.id});res.status(201).json({...publicAccount(getUserById.get(id)),temporaryPassword:password});}catch(error){if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'An account with that email already exists.'});throw error;}
 });
 app.patch('/api/users/:id',requireAuth,requireSuperAdmin,(req,res)=>{
   const target=getUserById.get(req.params.id);if(!target)return res.status(404).json({error:'Account not found.'});
   if(target.id===req.user.id&&req.body?.isActive===false)return res.status(400).json({error:'Sign out before deactivating your own account.'});
-  const active=req.body?.isActive;const name=String(req.body?.name??target.name).trim();const email=String(req.body?.email??target.email).trim().toLowerCase();const roleId=String(req.body?.roleId??target.role_id);const role=getRoleById.get(roleId);
+  const active=req.body?.isActive;const name=String(req.body?.name??target.name).trim();const email=String(req.body?.email??target.email).trim().toLowerCase();const roleId=String(req.body?.roleId??target.role_id);const role=getRoleById.get(roleId);const assigned=Array.isArray(req.body?.assignedWards)?req.body.assignedWards:JSON.parse(target.assigned_wards_json);
   if(typeof active!=='boolean'&&req.body?.name===undefined&&req.body?.email===undefined&&req.body?.roleId===undefined)return res.status(400).json({error:'Provide account fields to update.'});
   if(name.length<2||name.length>100||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!role)return res.status(400).json({error:'Enter valid account details and choose a role.'});
+  if(role.id==='ROLE-SUPER-ADMIN'&&target.role_id!=='ROLE-SUPER-ADMIN')return res.status(400).json({error:'Staff accounts cannot be assigned the protected Staff Admin role.'});
   if(target.role_id==='ROLE-SUPER-ADMIN'&&roleId!=='ROLE-SUPER-ADMIN')return res.status(400).json({error:'The Super Admin account is protected.'});
+  const roleObj=toRole(role);if(roleObj.scopeType==='WARD'&&(!assigned.length||assigned.some(id=>!getWardById.get(id)||(roleObj.wardIds?.length&&!roleObj.wardIds.includes(id)))))return res.status(400).json({error:'Select at least one ward allowed by the assigned role.'});
+  const savedAssigned=roleObj.scopeType==='WARD'?assigned:[];
   const isActive=typeof active==='boolean'?active:Boolean(target.is_active);
-  try{db.transaction(()=>{db.prepare('UPDATE users SET name=?,email=?,role_id=?,is_active=? WHERE id=?').run(name,email,roleId,isActive?1:0,target.id);if(!isActive)db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);audit(req.user.id,'USER_UPDATED',`${name} account updated.`,null,{roleId,isActive});})();}catch(error){if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'An account with that email already exists.'});throw error;}
+  try{db.transaction(()=>{db.prepare('UPDATE users SET name=?,email=?,role_id=?,assigned_wards_json=?,is_active=? WHERE id=?').run(name,email,roleId,JSON.stringify(savedAssigned),isActive?1:0,target.id);if(!isActive)db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);audit(req.user.id,'USER_UPDATED',`${name} account updated.`,null,{roleId,isActive});})();}catch(error){if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'An account with that email already exists.'});throw error;}
   res.json(publicAccount(getUserById.get(target.id)));
 });
 app.post('/api/users/:id/reset-password',requireAuth,requireSuperAdmin,(req,res)=>{
@@ -163,7 +183,7 @@ app.get('/api/analytics/summary',requireAuth,requirePermission('analytics:view')
   const byStatus={PENDING:0,UNDER_INVESTIGATION:0,RESOLVED:0};const bySla={ON_TIME:0,WARNING:0,OVERDUE:0};for(const r of rows){byStatus[r.status]+=r.count;bySla[r.sla_status]+=r.count;}
   res.json({total:Object.values(byStatus).reduce((a,b)=>a+b,0),byStatus,bySla,generatedAt:new Date().toISOString()});
 });
-app.get('/api/activity',requireAuth,requirePermission('analytics:view'),(req,res)=>{let rows=eventsList.all();if(req.role.scopeType==='DIVISION')rows=rows.filter(row=>{const detail=JSON.parse(row.details_json);return !detail.divisionId||detail.divisionId===req.role.divisionId;});else if(req.role.scopeType==='WARD'){const ids=allowedWardIds(req);rows=rows.filter(row=>!row.ticket_id||ids.includes(db.prepare('SELECT ward_id FROM tickets WHERE id=?').get(row.ticket_id)?.ward_id));}res.json(rows.map(row=>({id:row.id,userId:row.user_id,ticketId:row.ticket_id,grievanceId:row.grievance_id,actorName:row.actor_name,type:row.event_type,summary:row.summary,details:JSON.parse(row.details_json),createdAt:row.created_at})));});
+app.get('/api/activity',requireAuth,requirePermission('analytics:view'),(req,res)=>res.json(scopedActivities(req)));
 
 app.use('/api',(req,res)=>res.status(404).json({error:'API endpoint not found.'}));
 app.use((error,_req,res,_next)=>{console.error(error);res.status(500).json({error:'The request could not be completed.'});});

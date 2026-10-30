@@ -8,6 +8,7 @@
     "server": "node server/index.js",
     "start:local": "concurrently -k -n API,WEB -c blue,green \"npm:server\" \"npm:dev -- --host 127.0.0.1\"",
     "build": "tsc -b && vite build",
+    "test:rbac": "node --test scripts/rbac.integration.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -81,6 +81,13 @@ if (!db.prepare("SELECT 1 FROM app_migrations WHERE id='purge-synthetic-demo-dat
 }
 
 export const permissions = ['tickets:read','tickets:resolve','tickets:reroute','users:manage','analytics:view'];
+export const accessLevelPermissionGrants = {
+  SUPER_ADMIN: permissions,
+  DIVISION_ADMIN: ['tickets:read','tickets:resolve','tickets:reroute','analytics:view'],
+  L1_RESOLVING_OFFICER: ['tickets:read','tickets:resolve','tickets:reroute'],
+  APPELLATE_AUTHORITY: ['tickets:read','tickets:resolve','analytics:view'],
+  OTHER_CASE_TRIAGE: ['tickets:read','tickets:reroute'],
+};
 export const divisions = [
   ['CYBER_INFORMATION_SECURITY','Cyber & Information Security','CYBERCRIME'],
   ['FOREIGNERS','Foreigners Division','IMMIGRATION'],
@@ -101,7 +108,8 @@ export const divisions = [
 ];
 
 export const toRole = row => row && ({
-  id: row.id, name: row.name, description: row.description, permissions: JSON.parse(row.permissions_json),
+  id: row.id, name: row.name, description: row.description,
+  permissions: JSON.parse(row.permissions_json).filter(permission => (accessLevelPermissionGrants[row.access_level ?? (row.id==='ROLE-SUPER-ADMIN'?'SUPER_ADMIN':row.scope_type==='WARD'?'L1_RESOLVING_OFFICER':'DIVISION_ADMIN')] ?? []).includes(permission)),
   scopeType: row.scope_type, ...(row.division_id ? { divisionId: row.division_id } : {}),
   wardIds: JSON.parse(row.ward_ids_json), isSystem: Boolean(row.is_system), accessLevel: row.access_level ?? (row.id==='ROLE-SUPER-ADMIN'?'SUPER_ADMIN':row.scope_type==='WARD'?'L1_RESOLVING_OFFICER':'DIVISION_ADMIN'),
 });
@@ -155,19 +163,14 @@ export function seedDatabase() {
   db.prepare("UPDATE roles SET access_level='SUPER_ADMIN' WHERE id='ROLE-SUPER-ADMIN'").run();
   db.prepare("UPDATE roles SET access_level='L1_RESOLVING_OFFICER' WHERE scope_type='WARD' AND id<>'ROLE-SUPER-ADMIN'").run();
   db.prepare("UPDATE roles SET access_level='DIVISION_ADMIN' WHERE scope_type='DIVISION'").run();
-  const levels = [
-    ['CYBER_INFORMATION_SECURITY','Cyber & Information Security'], ['FOREIGNERS','Foreigners & Immigration'],
-    ['DISASTER_MANAGEMENT','Disaster Management (NDRF & Relief)'], ['CENTRAL_ARMED_POLICE_FORCES','CAPF & Police'],
-    ['NGO_FCRA','FCRA & NGO'], ['UT_ADMINISTRATION','Union Territory Administration'],
-    ['FREEDOM_FIGHTERS_REHABILITATION','Freedom Fighters & Rehabilitation'], ['COUNTER_TERRORISM','Counter Terrorism, Radicalization & Internal Security'],
-  ];
+  const levels = divisions.filter(([divisionId])=>divisionId!=='OTHER_TRIAGE').map(([divisionId,label])=>[divisionId,label]);
   const addLevelRole = db.prepare('INSERT OR IGNORE INTO roles(id,name,description,permissions_json,scope_type,division_id,ward_ids_json,is_system,access_level) VALUES(?,?,?,?,?,?,?,?,?)');
   for (const [divisionId, label] of levels) {
     const base = `ROLE-${divisionId}`;
     const definition = db.prepare('SELECT permissions_json FROM roles WHERE id=?').get(base);
     const perms = definition?.permissions_json ?? JSON.stringify(['tickets:read','tickets:resolve','tickets:reroute']);
-    addLevelRole.run(`ROLE-L1-${divisionId}`, `${label} · L1 Resolving Officer`, `Assigned-ward case handling for ${label}.`, perms, 'WARD', divisionId, '[]', 1, 'L1_RESOLVING_OFFICER');
-    addLevelRole.run(`ROLE-APPEAL-${divisionId}`, `${label} · Appellate Authority`, `Appeals-only review for ${label}.`, JSON.stringify(['tickets:read','analytics:view']), 'DIVISION', divisionId, '[]', 1, 'APPELLATE_AUTHORITY');
+    addLevelRole.run(`ROLE-L1-${divisionId}`, `${label} · L1 Resolving Officer`, `Assigned-ward case handling for ${label}.`, JSON.stringify(['tickets:read','tickets:resolve','tickets:reroute']), 'WARD', divisionId, '[]', 1, 'L1_RESOLVING_OFFICER');
+    addLevelRole.run(`ROLE-APPEAL-${divisionId}`, `${label} · Appellate Authority`, `Appeals-only review for ${label}.`, JSON.stringify(['tickets:read','tickets:resolve','analytics:view']), 'DIVISION', divisionId, '[]', 1, 'APPELLATE_AUTHORITY');
   }
   // Retire the former cross-department triage role. Keep any associated account
   // working with the least-privileged ward role until an administrator reassigns it.
@@ -181,6 +184,17 @@ export function seedDatabase() {
     })();
   }
   addLevelRole.run('ROLE-OTHER-CASE-TRIAGE','Other Case Triage Officer','Reviews complaints assigned to the Other department and routes them to the correct MHA division.',JSON.stringify(['tickets:read','tickets:reroute']),'DIVISION','OTHER_TRIAGE','[]',1,'OTHER_CASE_TRIAGE');
+  if (!db.prepare("SELECT 1 FROM app_migrations WHERE id='appellate-action-report-permission'").get()) {
+    db.transaction(() => {
+      const appellateRoles = db.prepare("SELECT id,permissions_json FROM roles WHERE access_level='APPELLATE_AUTHORITY' AND is_system=1").all();
+      for (const role of appellateRoles) {
+        const rolePermissions = JSON.parse(role.permissions_json);
+        if (!rolePermissions.includes('tickets:resolve')) rolePermissions.push('tickets:resolve');
+        db.prepare('UPDATE roles SET permissions_json=? WHERE id=?').run(JSON.stringify(rolePermissions), role.id);
+      }
+      db.prepare("INSERT INTO app_migrations(id) VALUES('appellate-action-report-permission')").run();
+    })();
+  }
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
 }
 
@@ -191,4 +205,4 @@ export const wardsList = db.prepare('SELECT * FROM wards ORDER BY id');
 export const getWardById = db.prepare('SELECT * FROM wards WHERE id=?');
 export const usersList = db.prepare(`SELECT id,name,email,mobile_number,role_id,assigned_wards_json,is_active,avatar_initials,last_sign_in FROM users ORDER BY name`);
 export const userDirectoryList = db.prepare(`SELECT id,name,email,mobile_number,role_id,assigned_wards_json,is_active,avatar_initials,last_sign_in FROM users ORDER BY name`);
-export const eventsList = db.prepare(`SELECT e.id,e.user_id,e.ticket_id,e.event_type,e.summary,e.details_json,e.created_at,u.name AS actor_name,t.grievance_id FROM activity_events e LEFT JOIN users u ON u.id=e.user_id LEFT JOIN tickets t ON t.id=e.ticket_id ORDER BY e.id DESC LIMIT 50`);
+export const eventsList = db.prepare(`SELECT e.id,e.user_id,e.ticket_id,e.event_type,e.summary,e.details_json,e.created_at,u.name AS actor_name,t.grievance_id,t.division_id AS ticket_division_id,t.ward_id AS ticket_ward_id,CASE WHEN json_extract(t.payload_json,'$.appealStatus')='APPEALED' THEN 1 ELSE 0 END AS ticket_appealed,r.division_id AS actor_division_id FROM activity_events e LEFT JOIN users u ON u.id=e.user_id LEFT JOIN roles r ON r.id=u.role_id LEFT JOIN tickets t ON t.id=e.ticket_id ORDER BY e.id DESC LIMIT 50`);

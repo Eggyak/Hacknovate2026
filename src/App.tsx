@@ -431,7 +431,7 @@ export default function App() {
     try {
       const saved = await api<User>(`/api/users/${encodeURIComponent(user.id)}`, {
         method: 'PATCH',
-        body: JSON.stringify({ name: user.name, email: user.email, roleId: user.roleId, isActive: user.isActive }),
+        body: JSON.stringify({ name: user.name, email: user.email, roleId: user.roleId, isActive: user.isActive, assignedWards: user.assignedWards }),
       });
       setUsers((current) => current.map((item) => item.id === saved.id ? saved : item));
       setEditingUser(null);
@@ -1145,11 +1145,15 @@ export default function App() {
                                 const nextAvailable = permissionsByAccessLevel[nextLevel];
                                 setRolePermissions((current) => current.filter((permission) => nextAvailable.includes(permission)));
                               }}>
-                                {currentRole.id === 'ROLE-SUPER-ADMIN' && <option value="SUPER_ADMIN">Super Admin</option>}
-                                <option value="DIVISION_ADMIN">Division Admin</option>
-                                <option value="L1_RESOLVING_OFFICER">L1 Resolving Officer</option>
-                                <option value="APPELLATE_AUTHORITY">Appellate Authority</option>
-                                {currentRole.divisionId === 'OTHER_TRIAGE' && <option value="OTHER_CASE_TRIAGE">Other Case Triage Officer</option>}
+                                {currentRole.id === 'ROLE-SUPER-ADMIN'
+                                  ? <option value="SUPER_ADMIN">Super Admin</option>
+                                  : currentRole.scopeType === 'WARD'
+                                  ? <option value="L1_RESOLVING_OFFICER">L1 Resolving Officer</option>
+                                  : <>
+                                      <option value="DIVISION_ADMIN">Division Admin</option>
+                                      <option value="APPELLATE_AUTHORITY">Appellate Authority</option>
+                                      {currentRole.divisionId === 'OTHER_TRIAGE' && <option value="OTHER_CASE_TRIAGE">Other Case Triage Officer</option>}
+                                    </>}
                               </select>
                             </label>
                           </div>
@@ -1429,7 +1433,7 @@ export default function App() {
               <h2>Edit staff account</h2>
               <button type="button" className="button button-quiet button-small" onClick={() => setEditingUser(null)}>Close</button>
             </div>
-            <EditStaffForm user={editingUser} roles={roles} onClose={() => setEditingUser(null)} onSave={saveUserEdit} />
+            <EditStaffForm user={editingUser} roles={roles} wards={wardList} onClose={() => setEditingUser(null)} onSave={saveUserEdit} />
           </div>
         </div>
       )}
@@ -1816,7 +1820,7 @@ function TicketDrawer({
   const canTriageOther = role.accessLevel === 'OTHER_CASE_TRIAGE' && ticket.category === 'OTHER';
 
   const canAct = role.permissions.includes('tickets:resolve') || role.permissions.includes('tickets:reroute');
-  const details = Object.entries(ticket.details).map(([key, value]) => ({
+  const details = Object.entries(ticket.details ?? {}).map(([key, value]) => ({
     label: prettyKey(key),
     value:
       typeof value === 'object' && value !== null
@@ -2055,21 +2059,28 @@ function TicketDrawer({
   );
 }
 
-function EditStaffForm({ user, roles, onClose, onSave }: { user: User; roles: Role[]; onClose: () => void; onSave: (user: User) => void }) {
+function EditStaffForm({ user, roles, wards, onClose, onSave }: { user: User; roles: Role[]; wards: Ward[]; onClose: () => void; onSave: (user: User) => void }) {
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
   const [roleId, setRoleId] = useState(user.roleId);
   const [isActive, setIsActive] = useState(user.isActive);
+  const [assignedWards, setAssignedWards] = useState(user.assignedWards);
   const roleDepartments = Array.from(new Set(roles.filter((role) => role.id !== 'ROLE-SUPER-ADMIN' && role.divisionId).map((role) => role.divisionId!)));
   const currentRole = roles.find((role) => role.id === roleId);
   const [departmentId, setDepartmentId] = useState(currentRole?.divisionId ?? 'WARD_OPERATIONS');
   const departmentRoles = roles.filter((role) => role.id !== 'ROLE-SUPER-ADMIN' && (departmentId === 'WARD_OPERATIONS' ? !role.divisionId : role.divisionId === departmentId));
-  return <form onSubmit={(event) => { event.preventDefault(); onSave({ ...user, name: name.trim(), email: email.trim(), roleId, isActive }); }}>
+  const updateRole = (nextRoleId: string) => {
+    const nextRole = roles.find((role) => role.id === nextRoleId);
+    setRoleId(nextRoleId);
+    setAssignedWards((current) => nextRole?.scopeType !== 'WARD' ? [] : nextRole.wardIds?.length ? current.filter((wardId) => nextRole.wardIds?.includes(wardId)) : current);
+  };
+  return <form onSubmit={(event) => { event.preventDefault(); onSave({ ...user, name: name.trim(), email: email.trim(), roleId, isActive, assignedWards: currentRole?.scopeType === 'WARD' ? assignedWards : [] }); }}>
     <div className="dialog-body">
       <label className="field"><span className="field-label">Full name</span><input className="input" required value={name} onChange={(event) => setName(event.target.value)} /></label>
       <label className="field"><span className="field-label">Login ID / Department email</span><input className="input" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-      <label className="field"><span className="field-label">Department</span><select className="select" value={departmentId} onChange={(event) => { const nextDepartment = event.target.value; setDepartmentId(nextDepartment); const firstRole = roles.find((role) => role.id !== 'ROLE-SUPER-ADMIN' && (nextDepartment === 'WARD_OPERATIONS' ? !role.divisionId : role.divisionId === nextDepartment)); if (firstRole) setRoleId(firstRole.id); }}><option value="WARD_OPERATIONS">National / Ward Operations</option>{roleDepartments.map((divisionId) => <option key={divisionId} value={divisionId}>{divisionId === 'OTHER_TRIAGE' ? 'Other Cases Triage' : divisionId.replaceAll('_', ' ')}</option>)}</select></label>
-      <label className="field"><span className="field-label">Role</span><select className="select" value={roleId} onChange={(event) => setRoleId(event.target.value)}>{departmentRoles.map((role) => <option key={role.id} value={role.id}>{role.name} · {role.accessLevel ?? role.scopeType}</option>)}</select></label>
+      <label className="field"><span className="field-label">Department</span><select className="select" value={departmentId} onChange={(event) => { const nextDepartment = event.target.value; setDepartmentId(nextDepartment); const firstRole = roles.find((role) => role.id !== 'ROLE-SUPER-ADMIN' && (nextDepartment === 'WARD_OPERATIONS' ? !role.divisionId : role.divisionId === nextDepartment)); if (firstRole) updateRole(firstRole.id); }}><option value="WARD_OPERATIONS">National / Ward Operations</option>{roleDepartments.map((divisionId) => <option key={divisionId} value={divisionId}>{divisionId === 'OTHER_TRIAGE' ? 'Other Cases Triage' : divisionId.replaceAll('_', ' ')}</option>)}</select></label>
+      <label className="field"><span className="field-label">Role</span><select className="select" value={roleId} onChange={(event) => updateRole(event.target.value)}>{departmentRoles.map((role) => <option key={role.id} value={role.id}>{role.name} · {role.accessLevel ?? role.scopeType}</option>)}</select></label>
+      {currentRole?.scopeType === 'WARD' && <div className="field"><span className="field-label">Assigned wards</span><div className="ward-assignment-list">{wards.filter((ward) => !currentRole.wardIds?.length || currentRole.wardIds.includes(ward.id)).map((ward) => <label key={ward.id}><input type="checkbox" checked={assignedWards.includes(ward.id)} onChange={(event) => setAssignedWards((current) => event.target.checked ? [...current, ward.id] : current.filter((id) => id !== ward.id))} /><span>{ward.id} · {ward.name}</span></label>)}</div></div>}
       <label className="toolbar"><input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} /> <span className="field-label">Account active</span></label>
     </div>
     <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary">Save changes</button></div>
@@ -2087,13 +2098,22 @@ function AddStaffForm({
   onClose: () => void;
   onSubmit: (u: User) => void;
 }) {
+  const staffRoles = roles.filter((role) => role.id !== 'ROLE-SUPER-ADMIN');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [roleId, setRoleId] = useState(roles[0]?.id ?? '');
+  const [roleId, setRoleId] = useState(staffRoles[0]?.id ?? '');
   const [selectedWards, setSelectedWards] = useState<string[]>([]);
+  const [departmentId, setDepartmentId] = useState(staffRoles.find((role) => role.id === (staffRoles[0]?.id ?? ''))?.divisionId ?? 'WARD_OPERATIONS');
 
-  const pickedRole = roles.find((r) => r.id === roleId);
+  const pickedRole = staffRoles.find((r) => r.id === roleId);
+  const roleDepartments = Array.from(new Set(staffRoles.filter((role) => role.divisionId).map((role) => role.divisionId!)));
+  const departmentRoles = staffRoles.filter((role) => departmentId === 'WARD_OPERATIONS' ? !role.divisionId : role.divisionId === departmentId);
+  const updateStaffRole = (nextRoleId: string) => {
+    const nextRole = staffRoles.find((role) => role.id === nextRoleId);
+    setRoleId(nextRoleId);
+    setSelectedWards((current) => nextRole?.scopeType !== 'WARD' ? [] : nextRole.wardIds?.length ? current.filter((wardId) => nextRole.wardIds?.includes(wardId)) : current);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2147,9 +2167,21 @@ function AddStaffForm({
           />
         </label>
         <label className="field">
+          <span className="field-label">DEPARTMENT</span>
+          <select className="select" value={departmentId} onChange={(event) => {
+            const nextDepartment = event.target.value;
+            setDepartmentId(nextDepartment);
+            const firstRole = staffRoles.find((role) => nextDepartment === 'WARD_OPERATIONS' ? !role.divisionId : role.divisionId === nextDepartment);
+            if (firstRole) updateStaffRole(firstRole.id);
+          }}>
+            <option value="WARD_OPERATIONS">National / Ward Operations</option>
+            {roleDepartments.map((divisionId) => <option key={divisionId} value={divisionId}>{divisionId === 'OTHER_TRIAGE' ? 'Other Cases Triage' : divisionId.replaceAll('_', ' ')}</option>)}
+          </select>
+        </label>
+        <label className="field">
           <span className="field-label">ASSIGNED ROLE</span>
-          <select className="select" value={roleId} onChange={(e) => setRoleId(e.target.value)}>
-            {roles.map((r) => (
+          <select className="select" value={roleId} onChange={(e) => updateStaffRole(e.target.value)}>
+            {departmentRoles.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name} &middot; {r.scopeType}
               </option>
@@ -2161,7 +2193,7 @@ function AddStaffForm({
           <div className="field">
             <span className="field-label">ASSIGNED WARDS</span>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', maxHeight: '140px', overflow: 'auto' }}>
-              {wards.map((ward) => (
+              {wards.filter((ward) => !pickedRole.wardIds?.length || pickedRole.wardIds.includes(ward.id)).map((ward) => (
                 <label key={ward.id} style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11px' }}>
                   <input
                     type="checkbox"
@@ -2221,7 +2253,7 @@ function NewRoleForm({
       permissions: perms,
       scopeType: scope,
       accessLevel,
-      ...(scope === 'DIVISION' ? { divisionId: division } : {}),
+      ...(division ? { divisionId: division } : {}),
       ...(scope === 'WARD' ? { wardIds: selectedWards } : {}),
       isSystem: false,
     });
@@ -2245,10 +2277,9 @@ function NewRoleForm({
         </label>
         <label className="field">
           <span className="field-label">JURISDICTION SCOPE</span>
-          <select className="select" value={scope} onChange={(e) => { const nextScope = e.target.value as Role['scopeType']; setScope(nextScope); if (accessLevel === 'OTHER_CASE_TRIAGE' && nextScope !== 'DIVISION') setAccessLevel('DIVISION_ADMIN'); }}>
-            <option value="GLOBAL">GLOBAL (National coverage)</option>
+          <select className="select" value={scope} onChange={(e) => { const nextScope = e.target.value as Role['scopeType']; if (division === 'OTHER_TRIAGE' && nextScope !== 'DIVISION') return; setScope(nextScope); if (nextScope === 'WARD' && accessLevel !== 'L1_RESOLVING_OFFICER') setAccessLevel('L1_RESOLVING_OFFICER'); if (nextScope === 'DIVISION' && accessLevel === 'L1_RESOLVING_OFFICER') setAccessLevel('DIVISION_ADMIN'); }}>
             <option value="DIVISION">DIVISION (Single MHA division)</option>
-            <option value="WARD">WARD (Assigned ward list)</option>
+            <option value="WARD" disabled={division === 'OTHER_TRIAGE'}>WARD (Assigned ward list)</option>
           </select>
         </label>
 
@@ -2259,6 +2290,8 @@ function NewRoleForm({
             setAccessLevel(nextLevel);
             const allowed = permissionsByAccessLevel[nextLevel];
             setPerms((current) => current.filter((permission) => allowed.includes(permission)));
+            setScope(nextLevel === 'L1_RESOLVING_OFFICER' ? 'WARD' : 'DIVISION');
+            if (nextLevel === 'OTHER_CASE_TRIAGE') setDivision('OTHER_TRIAGE');
           }}>
             <option value="DIVISION_ADMIN">Division Admin</option>
             <option value="L1_RESOLVING_OFFICER">L1 Resolving Officer</option>
@@ -2267,10 +2300,11 @@ function NewRoleForm({
           </select>
         </label>
 
-        {scope === 'DIVISION' && (
+        {scope !== 'GLOBAL' && (
           <label className="field">
-            <span className="field-label">MHA DIVISION</span>
-            <select className="select" value={division} onChange={(e) => { const nextDivision = e.target.value as Role['divisionId']; setDivision(nextDivision); if (accessLevel === 'OTHER_CASE_TRIAGE' && nextDivision !== 'OTHER_TRIAGE') setAccessLevel('DIVISION_ADMIN'); }}>
+            <span className="field-label">{scope === 'WARD' ? 'MHA DEPARTMENT (OPTIONAL)' : 'MHA DIVISION'}</span>
+            <select className="select" value={division} onChange={(e) => { const nextDivision = e.target.value as Role['divisionId']; setDivision(nextDivision); if (nextDivision === 'OTHER_TRIAGE') { setScope('DIVISION'); setAccessLevel('OTHER_CASE_TRIAGE'); setPerms((current) => current.filter((permission) => permissionsByAccessLevel.OTHER_CASE_TRIAGE.includes(permission))); } else if (accessLevel === 'OTHER_CASE_TRIAGE') { setAccessLevel('DIVISION_ADMIN'); setPerms((current) => current.filter((permission) => permissionsByAccessLevel.DIVISION_ADMIN.includes(permission))); } }}>
+              {scope === 'WARD' && <option value="">All departments</option>}
               {[
                 'CYBER_INFORMATION_SECURITY',
                 'FOREIGNERS',
