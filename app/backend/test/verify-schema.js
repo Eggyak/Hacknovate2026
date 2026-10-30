@@ -136,7 +136,10 @@ async function passOne() {
 
 async function passTwo() {
   const res = await fetch(`${BASE}/api/grievances/divisions`);
-  const { divisions } = await res.json();
+  const all = (await res.json()).divisions;
+  // `other` is a catch-all for complaints outside the document, not a
+  // division from it, and is excluded from this comparison by design.
+  const divisions = all.filter((d) => !d.supplementary);
 
   console.log(`\n=== 2. Divisions: document lists ${Object.keys(DIVISION_FIELDS).length}, system serves ${divisions.length} ===`);
 
@@ -156,6 +159,8 @@ async function passTwo() {
   const extra = divisions.filter((d) => !docNames.some((n) => labelMatches(n, [d.name])));
   check('no divisions beyond the document', extra.length === 0,
     extra.map((d) => d.name).join(', ') || 'none');
+  check('a catch-all exists for complaints outside it',
+    all.some((d) => d.id === 'other' && d.supplementary));
 }
 
 /**

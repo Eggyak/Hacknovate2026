@@ -352,6 +352,80 @@ export async function extractFields(division, { original, translated }) {
   return { ok: true, suggestions, rejected, model: env.mistral.model };
 }
 
+/**
+ * Work out what to ask about a complaint that fits none of the divisions.
+ *
+ * The fifteen divisions each carry a fixed list of required evidence because
+ * the law says what they need. A complaint outside all of them has no such
+ * list, and the honest options are to refuse it or to work out the questions
+ * from the complaint itself. Refusing is the bureaucratic failure this portal
+ * exists to remove, so we ask the model what an officer would need to know.
+ *
+ * Constrained hard, because this is the one place the model writes something
+ * the citizen must answer:
+ *   - between three and six questions, so the interview stays finishable
+ *   - one fact each, answerable in a sentence
+ *   - no identity numbers. Aadhaar, PAN and card numbers are not ours to
+ *     collect without a statutory reason, and a model inventing a reason is
+ *     exactly how that goes wrong
+ *
+ * Returns { ok, questions: [{ key, label }] }. On any failure the caller
+ * falls back to a fixed set, so an unlisted complaint is never refused for
+ * want of a model.
+ */
+export async function planQuestions({ original, translated }) {
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'A citizen has filed a grievance with the Indian Ministry of Home Affairs that does not '
+        + 'fall under any listed division. Decide what a case officer would need to ask them to '
+        + 'act on it.\n\n'
+        + 'Rules:\n'
+        + '- Between 3 and 6 questions. Fewer is better if fewer will do.\n'
+        + '- Each asks for ONE fact, answerable in a sentence.\n'
+        + '- Ask only what is not already stated in the complaint.\n'
+        + '- Plain language, no jargon, no legal citations.\n'
+        + '- NEVER ask for Aadhaar, PAN, card or account numbers, passwords or OTPs.\n'
+        + '- Prefer who, where, when, how much, and who else was involved.\n\n'
+        + 'Reply with JSON only: {"questions": [{"key": "snake_case_id", "label": "The question"}]}.',
+    },
+    {
+      role: 'user',
+      content:
+        `Complaint (original): ${String(original || '').slice(0, 2000)}\n`
+        + (translated ? `Complaint (English): ${String(translated).slice(0, 2000)}` : ''),
+    },
+  ];
+
+  const r = await chatJson(messages, { maxTokens: 600, kind: 'routing' });
+  if (!r.ok) return { ok: false, reason: r.reason, detail: r.detail };
+
+  const raw = Array.isArray(r.data.questions) ? r.data.questions : [];
+  const banned = /aadhaar|aadhar|\bpan\b|card number|account number|password|otp|cvv|pin number/i;
+
+  const questions = [];
+  const seen = new Set();
+
+  for (const q of raw) {
+    const label = String(q?.label || '').trim();
+    let key = String(q?.key || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40);
+
+    if (!label || label.length > 200) continue;
+    // The prompt forbids these; enforce it rather than trusting it.
+    if (banned.test(label)) continue;
+    if (!key) key = `q${questions.length + 1}`;
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    questions.push({ key, label });
+    if (questions.length >= 6) break;
+  }
+
+  if (questions.length < 2) return { ok: false, reason: 'too_few_usable_questions' };
+  return { ok: true, questions, model: env.mistral.model };
+}
+
 /** A short English subject line for the docket list. */
 export async function summarise(text, translated) {
   const messages = [

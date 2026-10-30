@@ -611,6 +611,129 @@ async function runFullVoiceFlow() {
   await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
 }
 
+/**
+ * A complaint that fits none of the fifteen divisions.
+ *
+ * The point of this path is that the portal accepts it anyway, and asks
+ * questions written for the complaint instead of a form that does not apply.
+ */
+async function runUnlistedComplaint() {
+  console.log('\n--- a complaint outside the listed divisions ---');
+  const { citizen, token } = await makeCitizen('9000000061');
+  const api = client(token);
+
+  const divisions = await (await fetch(`${BASE}/api/grievances/divisions`)).json();
+  const other = divisions.divisions.find((d) => d.id === 'other');
+  check('a catch-all division is offered', Boolean(other), other?.name);
+  check('it is marked as not from the document', other?.supplementary === true);
+
+  const start = await api('/chat/start', { method: 'POST', body: { language: 'en' } });
+  const id = start.data.conversationId;
+
+  const vague = await api(`/chat/${id}/message`, {
+    method: 'POST',
+    body: {
+      text: 'The community water tank in our colony has been locked by a private party '
+        + 'and residents are being charged to use it. Nobody will tell us under whose authority.',
+      inputMode: 'text',
+    },
+  });
+  check('the citizen is asked to choose', vague.data.bot?.input?.kind === 'choose_division',
+    vague.data.bot?.input?.kind);
+
+  const chosen = await api(`/chat/${id}/division`, { method: 'POST', body: { divisionId: 'other' } });
+  check('choosing Other is accepted', chosen.status === 200, `HTTP ${chosen.status}`);
+
+  const questions = chosen.data.draft?.otherQuestions || [];
+  const plan = chosen.data.draft?.otherPlan || {};
+  check('questions were planned for it', questions.length >= 2,
+    `${questions.length} via ${plan.source}`);
+  check('each question has a key and a readable label',
+    questions.every((q) => q.key && q.label && q.label.length > 5),
+    JSON.stringify(questions.slice(0, 2)));
+  check('no question asks for an identity number',
+    !questions.some((q) => /aadhaar|aadhar|\bpan\b|card number|password|otp/i.test(q.label)),
+    questions.map((q) => q.label).join(' | ').slice(0, 120));
+  check('the bot asks the first of them',
+    chosen.data.bot?.input?.field?.key === questions[0]?.key,
+    chosen.data.bot?.input?.field?.label);
+
+  // Answer each planned question in turn.
+  for (const q of questions) {
+    await api(`/chat/${id}/message`, {
+      method: 'POST',
+      body: { text: `Answer regarding ${q.key.replace(/_/g, ' ')}`, inputMode: 'text' },
+    });
+  }
+
+  await api(`/chat/${id}/message`, { method: 'POST', body: { text: '110001', inputMode: 'text' } });
+  await api(`/chat/${id}/message`, { method: 'POST', body: { text: 'New Delhi', inputMode: 'text' } });
+  await api(`/chat/${id}/message`, { method: 'POST', body: { text: '5 Rajpath', inputMode: 'text' } });
+  await api(`/chat/${id}/draft`, { method: 'PATCH', body: { skipLocationPin: true } });
+  await api(`/chat/${id}/message`, { method: 'POST', body: { text: 'Other Citizen', inputMode: 'text' } });
+  await api(`/chat/${id}/message`, { method: 'POST', body: { text: 'Male', inputMode: 'text' } });
+  await api(`/chat/${id}/declaration`, { method: 'POST', body: { accepted: true } });
+
+  const done = await api(`/chat/${id}/submit`, { method: 'POST', body: {} });
+  check('an unlisted complaint can be filed', done.status === 201,
+    JSON.stringify(done.data).slice(0, 140));
+
+  const g = (await query('SELECT * FROM grievances WHERE reference_id = $1',
+    [done.data.reference])).rows[0];
+  check('it is stored against the catch-all', g?.division_id === 'other', g?.division_id);
+  check('the answers are kept', Object.keys(g?.dynamic_details || {}).length >= 2,
+    JSON.stringify(g?.dynamic_details).slice(0, 110));
+  check('the questions are kept beside them',
+    Object.keys(g?.dynamic_labels || {}).length === Object.keys(g?.dynamic_details || {}).length,
+    JSON.stringify(g?.dynamic_labels).slice(0, 110));
+
+  await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
+}
+
+/** Chat history: past interviews are listed and can be resumed. */
+async function runChatHistory() {
+  console.log('\n--- chat history ---');
+  const { citizen, token } = await makeCitizen('9000000062');
+  const api = client(token);
+
+  const empty = await api('/chat/history');
+  check('history starts empty', empty.status === 200 && empty.data.conversations.length === 0);
+
+  const first = await api('/chat/start', { method: 'POST', body: { language: 'en' } });
+  await api(`/chat/${first.data.conversationId}/message`, {
+    method: 'POST',
+    body: { text: 'Money was taken from my bank account by an OTP scam', inputMode: 'text' },
+  });
+  await api('/chat/start', { method: 'POST', body: { language: 'en' } });
+
+  const list = await api('/chat/history');
+  check('both interviews are listed', list.data.conversations.length === 2,
+    String(list.data.conversations.length));
+
+  const withText = list.data.conversations.find((c) => c.id === first.data.conversationId);
+  check('each carries a readable title', Boolean(withText?.title), withText?.title);
+  check('and how far it got', withText?.turns >= 2, String(withText?.turns));
+
+  // Resuming returns the transcript, which is what lets the page redraw it.
+  const resumed = await api(`/chat/${first.data.conversationId}`);
+  check('a past interview can be resumed', resumed.status === 200);
+  check('its transcript comes back', (resumed.data.transcript || []).length >= 2,
+    String((resumed.data.transcript || []).length));
+  check('with the complaint intact',
+    /OTP scam/.test(JSON.stringify(resumed.data.draft?.originalText || '')),
+    String(resumed.data.draft?.originalText || '').slice(0, 40));
+
+  // Another citizen's history must never appear here.
+  const other = await makeCitizen('9000000063');
+  const theirs = client(other.token);
+  const peek = await theirs('/chat/history');
+  check('history is per citizen', peek.data.conversations.length === 0,
+    String(peek.data.conversations.length));
+  await query('DELETE FROM citizens WHERE mobile = $1', ['9000000063']);
+
+  await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
+}
+
 async function main() {
   console.log(`Testing ${BASE}`);
   try {
@@ -625,6 +748,8 @@ async function main() {
     await runInterfaceTranslation();
     await runSpeechConfig();
     await runFullVoiceFlow();
+    await runUnlistedComplaint();
+    await runChatHistory();
   } catch (err) {
     console.error('\nUNCAUGHT', err);
     failed += 1;

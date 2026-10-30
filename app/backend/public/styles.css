@@ -686,6 +686,30 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 .speaktoggle input { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
 .speaktoggle:has(input:checked) { border-color: var(--success); background: var(--success-soft); color: #166534; }
 
+/* ---------- Chat history ---------- */
+
+.chatlist { display: flex; flex-direction: column; gap: 6px; }
+.chatrow {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: 10px 13px; border: 1px solid var(--line); border-radius: var(--r);
+  cursor: pointer; background: #fff;
+}
+.chatrow:hover { background: var(--surface-2); border-color: var(--line-2); }
+.chatrow b {
+  display: block; font-size: 0.875rem; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chatrow .meta {
+  display: block; font-size: 0.75rem; color: var(--ink-3); margin-top: 3px;
+}
+.chatrow .btn.quiet { min-height: 30px; padding: 0 9px; font-size: 1.125rem; line-height: 1; flex: none; }
+
+/* The catch-all reads as a different kind of answer, not another department. */
+.chip-other {
+  border-style: dashed; border-color: var(--secondary); color: var(--secondary);
+}
+.chip-other:hover { background: #eff6ff; }
+
 /* ---------- Pipeline trace ---------- */
 
 /*

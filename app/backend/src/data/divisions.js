@@ -279,9 +279,35 @@ export const DIVISIONS = [
       1: ['reference', 'application status', 'संदर्भ'],
     },
   },
+  {
+    /*
+     * Not a division from the requirements document, and marked so the schema
+     * audit does not mistake it for one.
+     *
+     * A citizen whose problem genuinely belongs to none of the fifteen used to
+     * have nowhere to go: the bot asked them to pick, and every option was
+     * wrong. Refusing to take a complaint because it does not fit our list is
+     * the exact bureaucratic failure this portal exists to remove - so this
+     * accepts it, and the questions it then asks are written for the complaint
+     * rather than read from a fixed form. See mistral.planQuestions().
+     *
+     * It carries no lexicon on purpose: it must never be reached by routing,
+     * only by the citizen choosing it.
+     */
+    id: 'other',
+    name: 'Other / Not listed',
+    native: 'अन्य / सूचीबद्ध नहीं',
+    blurb: 'A matter that does not fall under any of the listed divisions.',
+    supplementary: true,
+    fields: [],
+    lexicon: {},
+  },
 ];
 
 export const BY_ID = new Map(DIVISIONS.map((d) => [d.id, d]));
+
+/** The fifteen from the requirements document, without the catch-all. */
+export const DOCUMENTED_DIVISIONS = DIVISIONS.filter((d) => !d.supplementary);
 
 export function divisionById(id) {
   return BY_ID.get(id) || null;

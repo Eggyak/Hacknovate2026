@@ -46,6 +46,7 @@ const state = {
   divisions: [],
   health: null,
   conversation: null,
+  activeConversationId: null,
   lastPipeline: null,
   lidCandidates: [],
 };
@@ -1216,6 +1217,15 @@ async function viewDashboard() {
 
 /* ---------- the interview ---------- */
 
+/**
+ * The grievance interview.
+ *
+ * Resumes `state.activeConversationId` when there is one and starts a fresh
+ * interview otherwise. That distinction is what keeps a half-written
+ * complaint alive across a language change: switching language re-renders
+ * every view, and the old version called /chat/start each time, so the
+ * citizen watched their complaint disappear.
+ */
 async function viewChat() {
   setView(`
     <div class="row between wrap mb-4">
@@ -1229,8 +1239,12 @@ async function viewChat() {
           <input type="checkbox" id="speakToggle">
           <span>&#128266; Speak replies</span>
         </label>
+        <button class="btn ghost" id="newChat" style="min-height:38px">+ New chat</button>
+        <button class="btn ghost" id="toggleHistory" style="min-height:38px">Recent chats</button>
       </div>
     </div>
+
+    <div id="historyPanel" class="card mb-4 hidden"></div>
 
     <div class="grid" style="grid-template-columns:minmax(0,1.65fr) minmax(0,1fr)">
       <div class="card" style="padding:0;overflow:hidden">
@@ -1258,12 +1272,33 @@ async function viewChat() {
   wireSpeakToggle();
   renderDetected(null);
 
-  const start = await api.post('/chat/start', { language: state.citizen.preferred_language || 'en' });
-  state.conversation = start;
-  pushBot(start.bot.text, start.language);
-  renderAffordance(start);
-  renderProgress(start);
-  renderDetected(start);
+  $('#newChat').onclick = () => startFreshChat();
+  $('#toggleHistory').onclick = () => toggleHistory();
+
+  let current = null;
+
+  if (state.activeConversationId) {
+    try {
+      current = await api.get(`/chat/${state.activeConversationId}`);
+      replayTranscript(current.transcript || []);
+    } catch {
+      // Gone, or belonging to someone else. Start over rather than leaving
+      // the citizen staring at an empty panel.
+      state.activeConversationId = null;
+      current = null;
+    }
+  }
+
+  if (!current) {
+    current = await api.post('/chat/start', { language: state.citizen.preferred_language || 'en' });
+    state.activeConversationId = current.conversationId;
+    pushBot(current.bot.text, current.language);
+  }
+
+  state.conversation = current;
+  renderAffordance(current);
+  renderProgress(current);
+  renderDetected(current);
 
   $('#composer').onsubmit = (e) => {
     e.preventDefault();
@@ -1284,6 +1319,153 @@ async function viewChat() {
   };
 
   wireMic();
+}
+
+/** Put a resumed conversation back on screen, in the order it happened. */
+function replayTranscript(turns) {
+  for (const turn of turns) {
+    if (turn.role === 'bot') pushBot(turn.text, turn.language);
+    else pushMe(turn.text, null);
+  }
+}
+
+/** Leave the current interview where it is and open a clean one. */
+async function startFreshChat() {
+  state.activeConversationId = null;
+  state.conversation = null;
+  state.lastPipeline = null;
+  await viewChat();
+}
+
+/*
+ * Hiding a past interview removes it from THIS browser's list only.
+ *
+ * It is not deleted. A grievance interview is a record of what a citizen said
+ * to a government portal, and a tidying gesture in a list must not destroy
+ * one. The ids live in localStorage, so the same account on another device
+ * still sees everything, and "Show hidden" brings them back here.
+ */
+const hiddenChats = {
+  key: 'mha_hidden_chats',
+  read() {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(this.key) || '[]'));
+    } catch {
+      return new Set();
+    }
+  },
+  write(set) {
+    try {
+      localStorage.setItem(this.key, JSON.stringify([...set]));
+    } catch { /* private window */ }
+  },
+  hide(id) {
+    const s = this.read();
+    s.add(String(id));
+    this.write(s);
+  },
+  hideAll(ids) {
+    const s = this.read();
+    ids.forEach((i) => s.add(String(i)));
+    this.write(s);
+  },
+  clear() {
+    this.write(new Set());
+  },
+};
+
+async function showHistory() {
+  const panel = $('#historyPanel');
+  if (!panel) return;
+
+  panel.classList.remove('hidden');
+  panel.innerHTML = '<div class="center" style="padding:20px"><span class="spin dark"></span></div>';
+
+  try {
+    const { conversations } = await api.get('/chat/history');
+    const hidden = hiddenChats.read();
+    const visible = conversations.filter((c) => !hidden.has(String(c.id)));
+
+    panel.innerHTML = `
+      <div class="row between wrap mb-3">
+        <h3 style="margin:0">Recent chats</h3>
+        <div class="row" style="gap:8px">
+          ${hidden.size ? '<button class="btn quiet" id="restoreChats">Show hidden</button>' : ''}
+          ${visible.length ? '<button class="btn quiet" id="clearChats">Clear list</button>' : ''}
+        </div>
+      </div>
+      ${visible.length === 0 ? `
+        <p class="muted small" style="margin:0">
+          ${hidden.size
+            ? 'Your list is cleared on this device. Nothing has been deleted.'
+            : 'No earlier chats yet.'}
+        </p>` : `
+        <div class="chatlist">
+          ${visible.map((c) => `
+            <div class="chatrow" data-open="${c.id}">
+              <div style="min-width:0">
+                <b>${esc(c.title || 'Untitled complaint')}</b>
+                <span class="meta">
+                  ${c.submitted
+                    ? `<span class="badge ok">${esc(c.reference)}</span>`
+                    : statusChip(c.step)}
+                  &middot; ${c.turns} message(s) &middot; ${fmtDateTime(c.updatedAt)}
+                </span>
+              </div>
+              <button class="btn quiet" data-hide="${c.id}"
+                      title="Remove from this list. The chat is not deleted.">&times;</button>
+            </div>`).join('')}
+        </div>`}`;
+
+    $$('[data-open]', panel).forEach((row) => {
+      row.onclick = async (e) => {
+        if (e.target.closest('[data-hide]')) return;
+        state.activeConversationId = Number(row.dataset.open);
+        state.conversation = null;
+        await viewChat();
+      };
+    });
+
+    $$('[data-hide]', panel).forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        hiddenChats.hide(b.dataset.hide);
+        showHistory();
+      };
+    });
+
+    const clear = $('#clearChats');
+    if (clear) {
+      clear.onclick = () => {
+        hiddenChats.hideAll(visible.map((c) => c.id));
+        toast('List cleared on this device. No chat was deleted.', 'good');
+        showHistory();
+      };
+    }
+
+    const restore = $('#restoreChats');
+    if (restore) {
+      restore.onclick = () => {
+        hiddenChats.clear();
+        showHistory();
+      };
+    }
+  } catch (ex) {
+    panel.innerHTML = `<div class="notice bad">${esc(ex.message)}</div>`;
+  }
+}
+
+function toggleHistory() {
+  const panel = $('#historyPanel');
+  if (!panel) return;
+  if (panel.classList.contains('hidden')) showHistory();
+  else panel.classList.add('hidden');
+}
+
+function statusChip(step) {
+  return step === 'done'
+    ? '<span class="badge pending">Ready to submit</span>'
+    : `<span class="badge neutral">In progress &middot; ${esc(String(step).replace(/_/g, ' '))}</span>`;
 }
 
 /**
@@ -1465,13 +1647,22 @@ function renderAffordance(r) {
 
 function renderDivisionList(suggested) {
   const chips = $('#chips');
+  const listed = state.divisions.filter((d) => d.id !== 'other');
+  const other = state.divisions.find((d) => d.id === 'other');
+
   const order = [
-    ...suggested.map((id) => state.divisions.find((d) => d.id === id)).filter(Boolean),
-    ...state.divisions.filter((d) => !suggested.includes(d.id)),
+    ...suggested.map((id) => listed.find((d) => d.id === id)).filter(Boolean),
+    ...listed.filter((d) => !suggested.includes(d.id)),
   ];
+
   chips.innerHTML = order
     .map((d) => `<button class="chip" data-d="${esc(d.id)}" title="${esc(d.blurb)}">${esc(d.name)}</button>`)
-    .join('');
+    .join('')
+    // Always last, always present. A complaint that fits none of the fifteen
+    // must still have somewhere to go; refusing it because our list is short
+    // is the failure this portal exists to remove.
+    + (other ? `<button class="chip chip-other" data-d="other" title="${esc(other.blurb)}">${esc(other.name)}</button>` : '');
+
   $$('[data-d]', chips).forEach((b) => { b.onclick = () => chooseDivision(b.dataset.d); });
 }
 
@@ -1481,6 +1672,14 @@ async function chooseDivision(divisionId) {
 
   // Append rather than replace: the routing trace above it is still the
   // answer to "how did this get here", and wiping it would lose that.
+  if (r.draft?.otherPlan) {
+    const p = r.draft.otherPlan;
+    const n = (r.draft.otherQuestions || []).length;
+    toast(p.source === 'llm'
+      ? `This does not fit a listed department, so I have ${n} questions written for your complaint.`
+      : `This does not fit a listed department, so I will ask ${n} general questions.`);
+  }
+
   if (r.draft?.extraction) {
     state.lastPipeline = {
       steps: [
@@ -1684,6 +1883,7 @@ async function finishUp() {
         </div>
       </div>`);
     state.conversation = null;
+    state.activeConversationId = null;
   } catch (ex) {
     toast(ex.message, 'bad');
   }

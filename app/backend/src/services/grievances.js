@@ -92,11 +92,25 @@ export function validateDynamicDetails(divisionId, details = {}) {
   return errors;
 }
 
-function pickKnownKeys(divisionId, details = {}) {
+/**
+ * Drop anything the division did not ask for, so a crafted request cannot
+ * smuggle arbitrary JSON into a grievance.
+ *
+ * The unlisted division is the exception: its questions were written for the
+ * complaint rather than fixed in advance, so the allowlist travels with the
+ * submission. It is still an allowlist - bounded in count and in size - just
+ * one assembled per complaint instead of per division.
+ */
+function pickKnownKeys(divisionId, details = {}, extraKeys = []) {
   const allowed = new Set(fieldsFor(divisionId).map((f) => f.key));
+  for (const k of extraKeys) allowed.add(k);
+
   const out = {};
+  let kept = 0;
   for (const [k, v] of Object.entries(details)) {
-    if (allowed.has(k)) out[k] = v;
+    if (!allowed.has(k) || kept >= 24) continue;
+    out[k] = typeof v === 'string' ? v.slice(0, 2000) : v;
+    kept += 1;
   }
   return out;
 }
@@ -146,6 +160,7 @@ export async function createGrievance(input) {
     latitude = null,
     longitude = null,
     dynamicDetails = {},
+    dynamicLabels = {},
     declarationTruth = false,
     audioPath = null,
     attachments = [],
@@ -176,7 +191,7 @@ export async function createGrievance(input) {
 
   if (errors.length > 0) throw new ValidationError(errors);
 
-  const known = pickKnownKeys(divisionId, dynamicDetails);
+  const known = pickKnownKeys(divisionId, dynamicDetails, Object.keys(dynamicLabels || {}));
   const { details, masked } = maskSensitiveValues(divisionId, known);
 
   const resolvedState = pincode ? stateForPincode(pincode) : null;
@@ -192,7 +207,7 @@ export async function createGrievance(input) {
          original_text, translated_text, translation_provider, audio_path, subject,
          detected_language, detected_locale, language_confidence, language_method, input_mode,
          pincode, state, district, address, latitude, longitude,
-         dynamic_details, declaration_truth,
+         dynamic_details, dynamic_labels, declaration_truth,
          status, submitted_at, sla_deadline
        ) VALUES (
          $1, $2, $3,
@@ -200,8 +215,8 @@ export async function createGrievance(input) {
          $8, $9, $10, $11, $12,
          $13, $14, $15, $16, $17,
          $18, $19, $20, $21, $22, $23,
-         $24, $25,
-         'submitted', NOW(), NOW() + ($26 || ' days')::interval
+         $24, $25, $26,
+         'submitted', NOW(), NOW() + ($27 || ' days')::interval
        )
        RETURNING *`,
       [
@@ -229,6 +244,7 @@ export async function createGrievance(input) {
         latitude,
         longitude,
         JSON.stringify(details),
+        JSON.stringify(dynamicLabels || {}),
         true,
         String(env.sla.days),
       ],

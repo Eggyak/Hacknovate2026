@@ -40,6 +40,20 @@ import { t } from '../data/phrases.js';
 const LANGUAGE_SWITCH_CONFIDENCE = 0.5;
 const LANGUAGE_SWITCH_MIN_LETTERS = 8;
 
+/**
+ * What to ask about an unlisted complaint when the model cannot be reached.
+ *
+ * Deliberately generic and deliberately short. It is worse than questions
+ * written for the complaint, and far better than refusing to take it.
+ */
+const FALLBACK_OTHER_QUESTIONS = [
+  { key: 'what_happened', label: 'What exactly happened? Describe it in order.' },
+  { key: 'when_happened', label: 'When did this happen?' },
+  { key: 'who_involved', label: 'Who was involved, including any office or official?' },
+  { key: 'action_taken', label: 'Have you reported this anywhere already? What came of it?' },
+  { key: 'desired_outcome', label: 'What outcome are you asking for?' },
+];
+
 export const STEPS = [
   'narrative',
   'confirm_division',
@@ -65,6 +79,7 @@ function emptyDraft() {
     classification: null,
     details: {},
     suggestions: {},
+    otherQuestions: null,
     pincode: null,
     state: null,
     district: null,
@@ -89,6 +104,42 @@ export async function startConversation(citizenId, language = 'en') {
     [citizenId, language, JSON.stringify(emptyDraft())],
   );
   return r.rows[0];
+}
+
+/**
+ * Past interviews, newest first.
+ *
+ * Enough to recognise one in a list - what it was about, where it got to,
+ * and whether it ended in a docket - without loading every transcript.
+ */
+export async function listConversations(citizenId, limit = 25) {
+  const r = await query(
+    `SELECT c.id, c.step, c.language, c.created_at, c.updated_at,
+            c.draft->>'originalText'  AS opening,
+            c.draft->>'divisionId'    AS division_id,
+            g.reference_id,
+            jsonb_array_length(COALESCE(c.transcript, '[]'::jsonb)) AS turns
+       FROM conversations c
+       LEFT JOIN grievances g ON g.id = c.grievance_id
+      WHERE c.citizen_id = $1
+      ORDER BY c.updated_at DESC
+      LIMIT $2`,
+    [citizenId, Math.min(Number(limit) || 25, 50)],
+  );
+
+  return r.rows.map((row) => ({
+    id: row.id,
+    step: row.step,
+    language: row.language,
+    divisionId: row.division_id,
+    reference: row.reference_id,
+    turns: row.turns,
+    // A one-line gist, so the list is scannable without opening anything.
+    title: (row.opening || '').trim().slice(0, 80) || null,
+    submitted: Boolean(row.reference_id),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
 }
 
 export async function getConversation(citizenId, id) {
@@ -116,7 +167,7 @@ export function nextStep(draft, citizen) {
   if (!draft.originalText) return 'narrative';
   if (!draft.divisionId || !draft.confirmedDivision) return 'confirm_division';
 
-  const missing = fieldsFor(draft.divisionId).filter(
+  const missing = questionsFor(draft).filter(
     (f) => f.required && !String(draft.details?.[f.key] ?? '').trim(),
   );
   if (missing.length > 0) return 'details';
@@ -133,11 +184,27 @@ export function nextStep(draft, citizen) {
   return 'done';
 }
 
+/**
+ * What this complaint still has to answer.
+ *
+ * For the fifteen documented divisions that is their statutory field list.
+ * For an unlisted complaint it is the questions planned for it, which are
+ * shaped like fields so the rest of the interview cannot tell the difference.
+ */
+export function questionsFor(draft) {
+  if (!draft.divisionId) return [];
+  if (draft.divisionId === 'other') {
+    const planned = draft.otherQuestions || [];
+    return planned.map((q) => ({ ...q, type: 'textarea', required: true }));
+  }
+  return fieldsFor(draft.divisionId);
+}
+
 /** The next required field for the current division, or null. */
 export function pendingField(draft) {
   if (!draft.divisionId) return null;
   return (
-    fieldsFor(draft.divisionId).find(
+    questionsFor(draft).find(
       (f) => f.required && !String(draft.details?.[f.key] ?? '').trim(),
     ) || null
   );
@@ -528,10 +595,35 @@ export async function setDivision(conversation, citizen, divisionId) {
     };
   }
 
+  /*
+   * An unlisted complaint has no statutory field list, so the questions are
+   * written for it. The model is asked once, here, and the result is stored
+   * on the draft - the interview must not depend on reaching it again, and a
+   * citizen half way through must not lose their questions to a rate limit.
+   */
+  if (divisionId === 'other' && !draft.otherQuestions) {
+    let planned = null;
+    if (mistral.configured() && draft.originalText) {
+      const plan = await mistral.planQuestions({
+        original: draft.originalText,
+        translated: draft.translatedText,
+      });
+      if (plan.ok) {
+        planned = plan.questions;
+        draft.otherPlan = { model: plan.model, source: 'llm', count: plan.questions.length };
+      } else {
+        draft.otherPlan = { source: 'fallback', reason: plan.reason };
+      }
+    } else {
+      draft.otherPlan = { source: 'fallback', reason: 'llm_not_configured' };
+    }
+    draft.otherQuestions = planned || FALLBACK_OTHER_QUESTIONS;
+  }
+
   // With the division known, re-read the narrative for answers the citizen has
   // already given. These are suggestions the citizen sees and accepts in the
   // field - never values written straight into the record.
-  if (mistral.configured() && draft.originalText) {
+  if (divisionId !== 'other' && mistral.configured() && draft.originalText) {
     const extracted = await mistral.extractFields(division, {
       original: draft.originalText,
       translated: draft.translatedText,

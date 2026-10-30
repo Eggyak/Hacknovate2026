@@ -73,6 +73,7 @@ grievanceRouter.get('/divisions', (_req, res) => {
       native: d.native,
       blurb: d.blurb,
       helpline: d.helpline || null,
+      supplementary: Boolean(d.supplementary),
       fields: d.fields,
     })),
   });

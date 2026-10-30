@@ -13,6 +13,7 @@ import { Router } from 'express';
 import { requireCitizen } from '../lib/auth.js';
 import {
   startConversation,
+  listConversations,
   getConversation,
   handleMessage,
   setDivision,
@@ -68,6 +69,19 @@ chatRouter.post('/start', async (req, res, next) => {
     warmDivisionNames(language, DIVISIONS).catch(() => {});
     const reply = prompt(conversation, req.citizen);
     return res.json(view(conversation, req.citizen, reply));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/**
+ * Past interviews.
+ *
+ * Declared before /:id or Express would read "history" as a conversation id.
+ */
+chatRouter.get('/history', async (req, res, next) => {
+  try {
+    return res.json({ conversations: await listConversations(req.citizen.id, req.query.limit) });
   } catch (err) {
     return next(err);
   }
@@ -223,6 +237,9 @@ chatRouter.post('/:id/submit', async (req, res, next) => {
       latitude: d.latitude,
       longitude: d.longitude,
       dynamicDetails: d.details,
+      // For an unlisted complaint the questions were written for it, so they
+      // travel with the answers or the record cannot be read back.
+      dynamicLabels: Object.fromEntries((d.otherQuestions || []).map((q) => [q.key, q.label])),
       declarationTruth: d.declarationTruth,
       audioPath: d.audioPath || null,
       attachments: d.attachments || [],

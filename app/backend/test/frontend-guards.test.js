@@ -117,3 +117,30 @@ test('the footer sits at the bottom of a short page', () => {
     'body is no longer a full-height flex column');
   assert.ok(/main \{ flex: 1 0 auto; \}/.test(css), 'main no longer grows to fill');
 });
+
+test('a language change does not discard the interview', () => {
+  /*
+   * Switching language re-renders every view, and viewChat used to call
+   * /chat/start each time - so the citizen watched a half-written complaint
+   * disappear. It now resumes the active conversation instead.
+   */
+  assert.ok(/state\.activeConversationId/.test(app), 'the active conversation is not tracked');
+  assert.ok(
+    /if \(state\.activeConversationId\) \{[\s\S]{0,300}api\.get\(`\/chat\/\$\{state\.activeConversationId\}`\)/.test(app),
+    'viewChat no longer resumes the active conversation',
+  );
+  assert.ok(/replayTranscript/.test(app), 'a resumed conversation is not redrawn');
+});
+
+test('clearing recent chats does not delete them', () => {
+  // A grievance interview is a record of what a citizen said to a government
+  // portal. Tidying a list must not destroy one.
+  const block = app.slice(app.indexOf('const hiddenChats'), app.indexOf('async function showHistory'));
+  assert.ok(/localStorage/.test(block), 'hidden chats are not kept locally');
+  assert.ok(!/DELETE|api\.call|method: 'DELETE'/.test(block), 'hiding a chat reaches the server');
+});
+
+test('an unlisted complaint still has somewhere to go', () => {
+  assert.ok(/data-d="other"/.test(app), 'the catch-all is no longer offered');
+  assert.ok(/chip-other/.test(app), 'it is not distinguished from a real department');
+});
