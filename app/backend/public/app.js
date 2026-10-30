@@ -133,7 +133,9 @@ const I18N_ATTRS = ['placeholder', 'title', 'aria-label'];
 
 const i18n = {
   lang: 'en',
-  dict: {},          // English -> translated, for the active language
+  dict: {},                  // English -> translated, for the active language
+  originals: new WeakMap(),  // node -> { '#text' | attr : the English source }
+  tracked: [],               // every node we have touched, so it can be reset
   pending: false,
 
   load(lang) {
@@ -172,7 +174,15 @@ const i18n = {
     return true;
   },
 
-  /** Collect every translatable string currently on screen. */
+  /**
+   * Collect every translatable string currently on screen.
+   *
+   * The English source for each node is remembered the first time it is seen,
+   * and that source - never the node's current contents - is what gets looked
+   * up. The masthead strip and the footer live in the static shell and are
+   * never re-rendered, so without this, switching Punjabi to Tamil would
+   * translate Punjabi into Tamil instead of English into Tamil.
+   */
   collect(root = document.body) {
     const found = new Set();
     const nodes = [];
@@ -189,10 +199,10 @@ const i18n = {
 
     let node = walker.nextNode();
     while (node) {
-      const text = node.nodeValue.trim();
-      if (this.translatable(text)) {
-        found.add(text);
-        nodes.push({ node, text, attr: null });
+      const source = this.sourceOf(node, null);
+      if (this.translatable(source)) {
+        found.add(source);
+        nodes.push({ node, text: source, attr: null });
       }
       node = walker.nextNode();
     }
@@ -200,10 +210,11 @@ const i18n = {
     for (const el of root.querySelectorAll('[placeholder],[title],[aria-label]')) {
       if (el.closest('[data-no-i18n]')) continue;
       for (const attr of I18N_ATTRS) {
-        const value = el.getAttribute(attr);
-        if (value && this.translatable(value)) {
-          found.add(value.trim());
-          nodes.push({ node: el, text: value.trim(), attr });
+        if (!el.hasAttribute(attr)) continue;
+        const source = this.sourceOf(el, attr);
+        if (this.translatable(source)) {
+          found.add(source);
+          nodes.push({ node: el, text: source, attr });
         }
       }
     }
@@ -211,13 +222,47 @@ const i18n = {
     return { strings: [...found], nodes };
   },
 
+  /** The English this node started life with. */
+  sourceOf(node, attr) {
+    let record = this.originals.get(node);
+    if (!record) {
+      record = {};
+      this.originals.set(node, record);
+      this.tracked.push({ node, attr });
+    }
+    const key = attr || '#text';
+    if (record[key] === undefined) {
+      record[key] = attr ? node.getAttribute(attr).trim() : node.nodeValue.trim();
+      if (attr) this.tracked.push({ node, attr });
+    }
+    return record[key];
+  },
+
+  /** Put every tracked node back to the English it was authored in. */
+  restore() {
+    for (const { node, attr } of this.tracked) {
+      if (!node.isConnected) continue;
+      const record = this.originals.get(node);
+      if (!record) continue;
+      const source = record[attr || '#text'];
+      if (source === undefined) continue;
+      if (attr) node.setAttribute(attr, source);
+      else if (node.nodeValue.trim() !== source) node.nodeValue = node.nodeValue.replace(node.nodeValue.trim(), source);
+    }
+    this.tracked = this.tracked.filter((t) => t.node.isConnected);
+  },
+
   /** Put the dictionary onto the collected nodes. */
   paint(nodes) {
     for (const { node, text, attr } of nodes) {
       const hit = this.dict[text];
       if (!hit) continue;
-      if (attr) node.setAttribute(attr, hit);
-      else node.nodeValue = node.nodeValue.replace(text, hit);
+      if (attr) {
+        node.setAttribute(attr, hit);
+      } else {
+        const current = node.nodeValue.trim();
+        if (current !== hit) node.nodeValue = node.nodeValue.replace(current, hit);
+      }
     }
   },
 
@@ -479,10 +524,13 @@ function renderChrome() {
       state.citizen.preferred_language = code;
     }
 
-    // Re-render from the English source, then translate. Translating the
-    // previous language's output would compound errors with every switch.
+    // Back to the authored English first. The masthead and footer live in the
+    // static shell and are never re-rendered, so without this they would be
+    // translated out of the previous language rather than out of English.
+    i18n.restore();
     i18n.load(code);
     await route();
+    localise();
   };
 
   localise();
