@@ -15,11 +15,13 @@ import { speechRouter } from './routes/speech.js';
 import { grievanceRouter } from './routes/grievances.js';
 import { i18nRouter, i18nStats } from './routes/i18n.js';
 import { mobileRouter } from './routes/mobile.js';
+import { civicRouter } from './routes/civic.js';
+import { escalateOverdue } from './services/civic.js';
 import { probe as speechProbe } from './services/azureSpeech.js';
 import { probe as translateProbe } from './services/translate.js';
 import { snapshot as mistralSnapshot } from './services/mistral.js';
 import { purgeExpired } from './services/otp.js';
-import { retryPending, refreshStatuses, configured as govtConfigured } from './services/govtIntake.js';
+import { retryPending, refreshStatuses, collectReplies, configured as govtConfigured } from './services/govtIntake.js';
 import { LANGUAGES } from './data/languages.js';
 import { DIVISIONS } from './data/divisions.js';
 
@@ -88,6 +90,8 @@ app.use('/api/grievances', grievanceRouter);
 app.use('/api/i18n', i18nRouter);
 // The Android client's contract: what this portal is, and what to show.
 app.use('/api/mobile', mobileRouter);
+// Core Features: support, comments, ratings, and the public civic views.
+app.use('/api/civic', civicRouter);
 
 app.use(
   express.static(FRONTEND, {
@@ -153,8 +157,27 @@ async function start() {
       refreshStatuses().then((r) => {
         if (r.changed > 0) console.log(`[govt] ${r.changed} case(s) moved`);
       }).catch((e) => console.error('[govt] status sweep failed', e.message));
+
+      // And collect anything an officer has written to the citizen.
+      collectReplies().then((r) => {
+        if (r.collected > 0) console.log(`[govt] collected ${r.collected} officer reply(ies)`);
+      }).catch((e) => console.error('[govt] reply sweep failed', e.message));
     }, env.govt.syncIntervalMs).unref();
   }
+
+  /*
+   * Raise anything past its deadline.
+   *
+   * A dashboard turning a row red is not accountability - nothing happens
+   * because of a colour. Escalation writes to the timeline the citizen can
+   * see and notifies them, so a missed statutory deadline becomes an event
+   * rather than a shade.
+   */
+  setInterval(() => {
+    escalateOverdue().then((r) => {
+      if (r.escalated > 0) console.log(`[sla] escalated ${r.escalated} overdue case(s)`);
+    }).catch((e) => console.error('[sla] escalation sweep failed', e.message));
+  }, 6 * 60 * 60 * 1000).unref();
 
   // Expired codes are useless and are a liability; sweep them hourly.
   setInterval(() => {

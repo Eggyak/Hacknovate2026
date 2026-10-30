@@ -95,7 +95,35 @@ mobileRouter.get('/manifest', (_req, res) => {
       departmentSync: caps.departmentSync,
       evidenceUpload: true,
       locationPin: true,
+      // Core Features v1.
+      satisfactionRating: true,
+      supportExisting: true,
+      caseComments: true,
+      duplicateDetection: true,
+      publicMap: true,
+      transparencyBoard: true,
+      anonymousFiling: true,
+      escalation: true,
     },
+
+    /*
+     * The lifecycle, in order, with labels. The app draws its timeline from
+     * this rather than hard-coding a list that would silently fall out of
+     * step the next time a state is added.
+     */
+    statuses: [
+      { id: 'submitted', label: 'Submitted' },
+      { id: 'under_review', label: 'Under review' },
+      { id: 'assigned', label: 'Assigned' },
+      { id: 'in_progress', label: 'In progress' },
+      { id: 'resolved', label: 'Resolved' },
+      { id: 'closed', label: 'Closed' },
+      { id: 'rejected', label: 'Rejected' },
+    ],
+    priorities: [
+      { score: 4, label: 'Critical' }, { score: 3, label: 'High' },
+      { score: 2, label: 'Medium' }, { score: 1, label: 'Low' },
+    ],
 
     languages: LANGUAGES.map((l) => ({
       code: l.code, locale: l.locale, name: l.name, native: l.native, dir: l.dir,
@@ -126,6 +154,11 @@ mobileRouter.get('/session', requireCitizen, async (req, res, next) => {
     const stats = await statsForCitizen(req.citizen.id);
     const unread = await query(
       'SELECT COUNT(*)::int AS n FROM notifications WHERE citizen_id = $1 AND read_at IS NULL',
+      [req.citizen.id],
+    );
+    const awaitingRating = await query(
+      `SELECT COUNT(*)::int AS n FROM grievances
+        WHERE citizen_id = $1 AND status IN ('resolved','closed') AND satisfaction_rating IS NULL`,
       [req.citizen.id],
     );
 
@@ -163,6 +196,7 @@ mobileRouter.get('/session', requireCitizen, async (req, res, next) => {
         { id: 'cases', label: 'My grievances', icon: 'folder', route: '/cases', badge: stats.active },
         { id: 'track', label: 'Track', icon: 'search', route: '/track' },
         { id: 'alerts', label: 'Updates', icon: 'bell', route: '/alerts', badge: unread.rows[0].n },
+        { id: 'nearby', label: 'Nearby', icon: 'map', route: '/nearby' },
         { id: 'profile', label: 'Profile', icon: 'person', route: '/profile' },
       ],
 
@@ -173,7 +207,18 @@ mobileRouter.get('/session', requireCitizen, async (req, res, next) => {
         pastDue: stats.breached,
         awaitingDepartment: Number(stats.awaiting_forward || 0),
         unreadAlerts: unread.rows[0].n,
+        awaitingRating: Number(awaitingRating.rows[0].n),
       },
+
+      /*
+       * Cases the citizen can now rate. Surfaced in the session so the app
+       * can prompt once, where it belongs, instead of asking on every screen
+       * or - worse - never asking and leaving the satisfaction figure empty.
+       */
+      prompts: Number(awaitingRating.rows[0].n) > 0
+        ? [{ kind: 'rate', count: Number(awaitingRating.rows[0].n),
+             message: 'Tell us how your resolved grievance was handled.' }]
+        : [],
     });
   } catch (err) {
     next(err);

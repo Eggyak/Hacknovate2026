@@ -436,6 +436,79 @@ function requireServiceKey(req,res,next){
   return next();
 }
 
+/*
+ * An officer's reply to the citizen.
+ *
+ * Stored here on the ticket and collected by the citizen portal's sweep, so
+ * the citizen reads one thread rather than having to look in two places for
+ * half a conversation each.
+ *
+ * Scoped like any other mutation: an officer who cannot see the ticket
+ * cannot comment on it, and out of scope returns 404 rather than 403 so the
+ * queue does not become a way to discover which cases exist elsewhere.
+ */
+db.exec(`CREATE TABLE IF NOT EXISTS ticket_replies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticket_id TEXT NOT NULL,
+  grievance_id TEXT NOT NULL,
+  user_id TEXT,
+  author_name TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  delivered INTEGER NOT NULL DEFAULT 0
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS ticket_replies_pending ON ticket_replies(delivered, id)');
+
+app.post('/api/tickets/:id/reply',requireAuth,requirePermission('tickets:read'),(req,res)=>{
+  const current=ticketById.get(req.params.id);
+  if(!current)return res.status(404).json({error:'Case not found.'});
+  // Reuse the same visibility test the status update uses, so a reply can
+  // never reach a case the officer could not have opened.
+  const scope=ticketScope(req);
+  const visible=db.prepare(`SELECT 1 FROM tickets${scope.sql?scope.sql+' AND':' WHERE'} id=?`).get(...scope.params,req.params.id);
+  if(!visible)return res.status(404).json({error:'Case not found.'});
+
+  const body=String(req.body?.body??'').trim();
+  if(body.length<2)return res.status(422).json({error:'Write a reply first.'});
+  if(body.length>2000)return res.status(422).json({error:'Keep the reply under 2000 characters.'});
+
+  db.transaction(()=>{
+    db.prepare('INSERT INTO ticket_replies(ticket_id,grievance_id,user_id,author_name,body) VALUES(?,?,?,?,?)')
+      .run(current.id,current.grievance_id,req.user.id,req.user.name,body);
+    audit(req.user.id,'TICKET_REPLY',`${req.user.name} replied on ${current.grievance_id}.`,current.id);
+  })();
+
+  res.status(201).json({ok:true});
+});
+
+app.get('/api/tickets/:id/replies',requireAuth,requirePermission('tickets:read'),(req,res)=>{
+  const current=ticketById.get(req.params.id);
+  if(!current)return res.status(404).json({error:'Case not found.'});
+  const scope=ticketScope(req);
+  const visible=db.prepare(`SELECT 1 FROM tickets${scope.sql?scope.sql+' AND':' WHERE'} id=?`).get(...scope.params,req.params.id);
+  if(!visible)return res.status(404).json({error:'Case not found.'});
+  res.json({replies:db.prepare('SELECT id,author_name,body,created_at FROM ticket_replies WHERE ticket_id=? ORDER BY id').all(current.id)});
+});
+
+/**
+ * Replies the citizen portal has not collected yet.
+ *
+ * Pulled rather than pushed: the department does not know or care where the
+ * citizen portal lives, and a pull means a portal that was down for an hour
+ * catches up by itself instead of losing an officer's reply.
+ */
+app.get('/api/intake/replies',serviceReadLimiter,requireServiceKey,(_req,res)=>{
+  res.json({replies:db.prepare('SELECT id,grievance_id,author_name,body,created_at FROM ticket_replies WHERE delivered=0 ORDER BY id LIMIT 200').all()});
+});
+
+app.post('/api/intake/replies/ack',serviceReadLimiter,requireServiceKey,(req,res)=>{
+  const ids=Array.isArray(req.body?.ids)?req.body.ids.map(Number).filter(Number.isInteger).slice(0,200):[];
+  if(ids.length===0)return res.json({acknowledged:0});
+  const mark=db.prepare(`UPDATE ticket_replies SET delivered=1 WHERE id IN (${ids.map(()=>'?').join(',')})`);
+  const r=db.transaction(()=>mark.run(...ids))();
+  res.json({acknowledged:r.changes});
+});
+
 app.get('/api/intake/wards',serviceReadLimiter,requireServiceKey,(_req,res)=>{
   res.json({wards:wardsList.all().map(w=>({id:w.id,name:w.name,district:w.district,state:w.state,pincodePrefix:w.pincode_prefix,zone:w.zone}))});
 });

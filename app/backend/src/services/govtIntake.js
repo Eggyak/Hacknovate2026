@@ -554,6 +554,80 @@ export async function refreshStatuses(limit = 25) {
   return { checked: r.rows.length, changed };
 }
 
+/**
+ * Collect officer replies and put them in the citizen's thread.
+ *
+ * Pulled, then acknowledged, rather than the department pushing: a portal
+ * that was down for an hour catches up by itself instead of an officer's
+ * reply being lost to a failed webhook. Acknowledging only after the insert
+ * succeeds means a crash in between repeats a reply rather than dropping it,
+ * and a duplicate the citizen can see beats an answer they never got.
+ */
+export async function collectReplies() {
+  if (!configured()) return { collected: 0 };
+
+  let payload;
+  try {
+    const res = await fetch(`${env.govt.baseUrl}/api/intake/replies`, {
+      headers: serviceHeaders(),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return { collected: 0, reason: `http_${res.status}` };
+    payload = await res.json();
+  } catch (err) {
+    return { collected: 0, reason: err.message };
+  }
+
+  const replies = Array.isArray(payload.replies) ? payload.replies : [];
+  if (replies.length === 0) return { collected: 0 };
+
+  const done = [];
+  for (const reply of replies) {
+    const g = await query(
+      'SELECT id, citizen_id, reference_id FROM grievances WHERE govt_grievance_id = $1',
+      [reply.grievance_id],
+    );
+    if (g.rows.length === 0) {
+      // Not ours - acknowledge so it does not block the queue for ever.
+      done.push(reply.id);
+      continue;
+    }
+
+    const row = g.rows[0];
+    await query(
+      `INSERT INTO grievance_comments (grievance_id, author_kind, author_name, body)
+       VALUES ($1, 'department', $2, $3)`,
+      [row.id, reply.author_name || 'Handling officer', String(reply.body).slice(0, 2000)],
+    );
+    await query(
+      `INSERT INTO notifications (citizen_id, grievance_id, title, body)
+       VALUES ($1, $2, $3::text, $4::text)`,
+      [
+        row.citizen_id, row.id,
+        `The department replied on ${row.reference_id}`,
+        String(reply.body).slice(0, 300),
+      ],
+    );
+    done.push(reply.id);
+  }
+
+  if (done.length > 0) {
+    try {
+      await fetch(`${env.govt.baseUrl}/api/intake/replies/ack`, {
+        method: 'POST',
+        headers: serviceHeaders(),
+        body: JSON.stringify({ ids: done }),
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      // They stay pending and arrive again next sweep. A repeated reply is
+      // recoverable; a lost one is not.
+    }
+  }
+
+  return { collected: done.length };
+}
+
 /** Ask the department what has happened to a case since. */
 export async function fetchStatus(govtGrievanceId) {
   if (!configured() || !govtGrievanceId) return null;

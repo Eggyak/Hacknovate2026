@@ -11,6 +11,7 @@ import { env } from '../lib/env.js';
 import { query, transaction } from '../lib/db.js';
 import { divisionById, fieldsFor } from '../data/divisions.js';
 import { stateForPincode, isValidPincode } from '../data/states.js';
+import { scorePriority, assignCluster } from './civic.js';
 
 export class ValidationError extends Error {
   constructor(errors) {
@@ -23,7 +24,14 @@ export class ValidationError extends Error {
 }
 
 /** Statuses a grievance moves through, in order. */
-export const STATUSES = ['submitted', 'under_review', 'in_progress', 'resolved', 'closed', 'rejected'];
+/*
+ * The lifecycle, in order. `assigned` comes from the Core Features document,
+ * which distinguishes a case somebody has been given from one merely being
+ * looked at - a difference a citizen can feel and should be able to see.
+ */
+export const STATUSES = [
+  'submitted', 'under_review', 'assigned', 'in_progress', 'resolved', 'closed', 'rejected',
+];
 
 /**
  * Identifiers we are required to collect but must not keep in full.
@@ -162,6 +170,7 @@ export async function createGrievance(input) {
     dynamicDetails = {},
     dynamicLabels = [],
     declarationTruth = false,
+    anonymous = false,
     audioPath = null,
     attachments = [],
   } = input;
@@ -197,6 +206,9 @@ export async function createGrievance(input) {
 
   const resolvedState = pincode ? stateForPincode(pincode) : null;
   const priority = classification.urgent ? 'high' : 'normal';
+  // Four bands, from what the classifier already found while routing. A
+  // second judgement here could disagree with the one the citizen was shown.
+  const priorityScore = scorePriority({ classification, divisionId, details });
 
   return transaction(async (client) => {
     const reference = await nextReference(client);
@@ -208,7 +220,7 @@ export async function createGrievance(input) {
          original_text, translated_text, translation_provider, audio_path, subject,
          detected_language, detected_locale, language_confidence, language_method, input_mode,
          pincode, state, district, address, latitude, longitude,
-         dynamic_details, dynamic_labels, declaration_truth,
+         dynamic_details, dynamic_labels, declaration_truth, priority_score, anonymous,
          status, submitted_at, sla_deadline
        ) VALUES (
          $1, $2, $3,
@@ -216,8 +228,8 @@ export async function createGrievance(input) {
          $8, $9, $10, $11, $12,
          $13, $14, $15, $16, $17,
          $18, $19, $20, $21, $22, $23,
-         $24, $25, $26,
-         'submitted', NOW(), NOW() + ($27 || ' days')::interval
+         $24, $25, $26, $27, $28,
+         'submitted', NOW(), NOW() + ($29 || ' days')::interval
        )
        RETURNING *`,
       [
@@ -247,6 +259,8 @@ export async function createGrievance(input) {
         JSON.stringify(details),
         JSON.stringify(Array.isArray(dynamicLabels) ? dynamicLabels : []),
         true,
+        priorityScore,
+        anonymous === true,
         String(env.sla.days),
       ],
     );
@@ -286,7 +300,17 @@ export async function createGrievance(input) {
       ],
     );
 
-    return { grievance, masked };
+    /*
+     * Group it with other reports of the same problem in the same place.
+     *
+     * Inside this transaction so two simultaneous reports cannot create two
+     * clusters for one thing. Grouping is never merging: this grievance
+     * keeps its own docket, its own deadline and its own complainant,
+     * because the person who filed it is separately entitled to an answer.
+     */
+    const cluster = await assignCluster(client, grievance, classification);
+
+    return { grievance, masked, cluster };
   });
 }
 
@@ -319,12 +343,27 @@ export async function getForCitizen(citizenId, reference) {
   if (r.rows.length === 0) return null;
 
   const grievance = r.rows[0];
-  const [events, attachments] = await Promise.all([
+  const [events, attachments, comments, supporters, cluster] = await Promise.all([
     query('SELECT * FROM grievance_events WHERE grievance_id = $1 ORDER BY created_at', [grievance.id]),
     query('SELECT id, kind, original_name, mime_type, size_bytes, created_at FROM grievance_attachments WHERE grievance_id = $1', [grievance.id]),
+    query('SELECT id, author_kind, author_name, body, created_at FROM grievance_comments WHERE grievance_id = $1 ORDER BY created_at', [grievance.id]),
+    query('SELECT COUNT(*)::int AS n FROM grievance_supports WHERE grievance_id = $1', [grievance.id]),
+    grievance.cluster_id
+      ? query('SELECT id, title, member_count, pincode FROM grievance_clusters WHERE id = $1', [grievance.cluster_id])
+      : Promise.resolve({ rows: [] }),
   ]);
 
-  return { ...grievance, events: events.rows, attachments: attachments.rows };
+  return {
+    ...grievance,
+    events: events.rows,
+    attachments: attachments.rows,
+    comments: comments.rows,
+    supporters: supporters.rows[0].n,
+    cluster: cluster.rows[0] || null,
+    // Whether the citizen may rate it now, so the app does not have to
+    // re-derive the rule and get it subtly different.
+    canRate: ['resolved', 'closed'].includes(grievance.status) && grievance.satisfaction_rating === null,
+  };
 }
 
 /**
