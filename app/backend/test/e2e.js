@@ -739,6 +739,133 @@ async function runChatHistory() {
   await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
 }
 
+/**
+ * Core Features, end to end.
+ *
+ * Two neighbours report the same problem, one adds their weight to the
+ * other's report, an officer resolves it, the citizen rates the service, and
+ * the transparency board reflects all of it. That whole chain is the feature,
+ * and testing any link of it alone proves very little.
+ */
+async function runCoreFeatures() {
+  console.log('\n--- core features ---');
+
+  const a = await makeCitizen('9000000101');
+  const b = await makeCitizen('9000000102');
+  await query("UPDATE citizens SET full_name='Neighbour A', gender='Male' WHERE id=$1", [a.citizen.id]);
+  await query("UPDATE citizens SET full_name='Neighbour B', gender='Female' WHERE id=$1", [b.citizen.id]);
+  const apiA = client(a.token);
+  const apiB = client(b.token);
+
+  const COMPLAINT = 'Cyber fraud: money was debited from my bank account through an OTP scam on a fake website';
+
+  async function fileOne(api, text) {
+    const start = await api('/chat/start', { method: 'POST', body: { language: 'en' } });
+    const id = start.data.conversationId;
+    const say = (t) => api(`/chat/${id}/message`, { method: 'POST', body: { text: t, inputMode: 'text' } });
+    await say(text);
+    await api(`/chat/${id}/division`, { method: 'POST', body: { divisionId: 'cyber' } });
+    for (const v of ['UTR110000000001', '60000', '2026-10-31 10:00', 'Fake website']) await say(v);
+    await say('110001');
+    await say('New Delhi');
+    await say('5 Rajpath');
+    await api(`/chat/${id}/draft`, { method: 'PATCH', body: { latitude: 28.6139, longitude: 77.2090 } });
+    await api(`/chat/${id}/declaration`, { method: 'POST', body: { accepted: true } });
+    const done = await api(`/chat/${id}/submit`, { method: 'POST', body: {} });
+    return done;
+  }
+
+  const first = await fileOne(apiA, COMPLAINT);
+  check('first neighbour files', first.status === 201, first.data.reference);
+
+  const second = await fileOne(apiB, `${COMPLAINT} — happened to me as well`);
+  check('second neighbour files', second.status === 201, second.data.reference);
+
+  // Both should land in one cluster: same division, same PIN, same terms.
+  const rowA = (await query('SELECT id, cluster_id, priority_score FROM grievances WHERE reference_id=$1', [first.data.reference])).rows[0];
+  const rowB = (await query('SELECT id, cluster_id FROM grievances WHERE reference_id=$1', [second.data.reference])).rows[0];
+  check('the two reports are grouped together',
+    rowA.cluster_id !== null && rowA.cluster_id === rowB.cluster_id,
+    `A=${rowA.cluster_id} B=${rowB.cluster_id}`);
+  check('grouping did not merge them',
+    first.data.reference !== second.data.reference, 'separate dockets kept');
+  check('priority was scored', rowA.priority_score >= 1 && rowA.priority_score <= 4,
+    `score ${rowA.priority_score}`);
+
+  const cluster = (await query('SELECT member_count FROM grievance_clusters WHERE id=$1', [rowA.cluster_id])).rows[0];
+  check('the cluster counts both', cluster.member_count === 2, String(cluster.member_count));
+
+  // B adds weight to A's report rather than filing a third.
+  const similar = await apiB('/civic/similar', {
+    method: 'POST',
+    body: { text: COMPLAINT, divisionId: 'cyber', pincode: '110001' },
+  });
+  check('similar reports are offered before filing', (similar.data.similar || []).length > 0,
+    `${(similar.data.similar || []).length} found`);
+
+  const sup = await apiB(`/civic/${first.data.reference}/support`, { method: 'POST' });
+  check('a neighbour can support an existing report', sup.status === 200 && sup.data.supporters === 1,
+    JSON.stringify(sup.data));
+
+  const again = await apiB(`/civic/${first.data.reference}/support`, { method: 'POST' });
+  check('supporting twice does not inflate the count', again.data.supporters === 1,
+    String(again.data.supporters));
+
+  const own = await apiA(`/civic/${first.data.reference}/support`, { method: 'POST' });
+  check('nobody can support their own report', own.status === 409, `HTTP ${own.status}`);
+
+  // The thread.
+  const comment = await apiA(`/civic/${first.data.reference}/comments`, {
+    method: 'POST', body: { body: 'The bank has frozen the beneficiary account.' },
+  });
+  check('the citizen can add an update', comment.status === 201, `HTTP ${comment.status}`);
+
+  const stranger = await apiB(`/civic/${first.data.reference}/comments`);
+  check('another citizen cannot read that thread', stranger.status === 404, `HTTP ${stranger.status}`);
+
+  // Rating is refused before the work is done.
+  const early = await apiA(`/civic/${first.data.reference}/rating`, { method: 'POST', body: { rating: 5 } });
+  check('rating is refused before resolution', early.status === 409, `HTTP ${early.status}`);
+
+  await query("UPDATE grievances SET status='resolved', closed_at=NOW(), resolution_seconds=172800 WHERE id=$1", [rowA.id]);
+
+  const bad = await apiA(`/civic/${first.data.reference}/rating`, { method: 'POST', body: { rating: 9 } });
+  check('an out-of-range rating is refused', bad.status === 422, `HTTP ${bad.status}`);
+
+  const rated = await apiA(`/civic/${first.data.reference}/rating`, {
+    method: 'POST', body: { rating: 4, comment: 'Handled quickly once it reached the cyber cell.' },
+  });
+  check('the citizen can rate a resolved case', rated.status === 200 && rated.data.rating === 4,
+    JSON.stringify(rated.data));
+
+  const detail = await apiA(`/grievances/${first.data.reference}`);
+  check('the record carries supporters, comments and the rating',
+    detail.data.supporters === 1 && (detail.data.comments || []).length >= 1
+      && detail.data.satisfaction_rating === 4,
+    `supporters=${detail.data.supporters} comments=${(detail.data.comments || []).length} rating=${detail.data.satisfaction_rating}`);
+  check('and says it can no longer be rated', detail.data.canRate === false, String(detail.data.canRate));
+
+  // Public views carry no identity.
+  const map = await (await fetch(`${BASE}/api/civic/map?pincode=110001`)).json();
+  check('the public map returns points', (map.points || []).length > 0, `${(map.points || []).length} points`);
+  const mapText = JSON.stringify(map);
+  check('the map leaks no identity or complaint text',
+    !/Neighbour|9000000101|MHA-GRV|OTP scam|UTR1100/.test(mapText), 'clean');
+  check('coordinates are rounded', (map.points || []).every((p) => String(p.lat).split('.')[1]?.length <= 3),
+    'to 3 decimal places');
+
+  const spots = await (await fetch(`${BASE}/api/civic/hotspots`)).json();
+  check('hotspots show the grouped reports',
+    (spots.hotspots || []).some((h) => h.reports >= 2), `${(spots.hotspots || []).length} hotspots`);
+
+  const board = await (await fetch(`${BASE}/api/civic/transparency`)).json();
+  const cyber = (board.divisions || []).find((d) => d.divisionId === 'cyber');
+  check('the transparency board scores the division', Boolean(cyber) && typeof cyber.transparencyScore === 'number',
+    cyber ? `score ${cyber.transparencyScore}, avg rating ${cyber.averageRating}` : 'missing');
+
+  await query('DELETE FROM citizens WHERE id = ANY($1)', [[a.citizen.id, b.citizen.id]]);
+}
+
 async function main() {
   console.log(`Testing ${BASE}`);
   try {
@@ -755,6 +882,7 @@ async function main() {
     await runFullVoiceFlow();
     await runUnlistedComplaint();
     await runChatHistory();
+    await runCoreFeatures();
   } catch (err) {
     console.error('\nUNCAUGHT', err);
     failed += 1;
