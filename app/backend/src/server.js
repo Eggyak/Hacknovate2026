@@ -15,6 +15,7 @@ import { speechRouter } from './routes/speech.js';
 import { grievanceRouter } from './routes/grievances.js';
 import { probe as speechProbe } from './services/azureSpeech.js';
 import { probe as translateProbe } from './services/translate.js';
+import { snapshot as mistralSnapshot } from './services/mistral.js';
 import { purgeExpired } from './services/otp.js';
 import { LANGUAGES } from './data/languages.js';
 import { DIVISIONS } from './data/divisions.js';
@@ -59,6 +60,10 @@ app.use(loadCitizen);
  */
 app.get('/api/health', async (_req, res) => {
   const [db, speech, translation] = await Promise.all([healthy(), speechProbe(), translateProbe()]);
+  // Not probed: a health check that burns a request from a 10-per-minute
+  // budget would itself cause the throttling it is meant to report. The
+  // counters say everything useful without spending anything.
+  const llm = mistralSnapshot();
 
   const ok = db;
   return res.status(ok ? 200 : 503).json({
@@ -66,7 +71,7 @@ app.get('/api/health', async (_req, res) => {
     service: 'mha-samadhan',
     version: '1.0.0',
     time: new Date().toISOString(),
-    dependencies: { database: { ok: db }, speech, translation },
+    dependencies: { database: { ok: db }, speech, translation, llm },
     capabilities: capabilities(),
     counts: { languages: LANGUAGES.length, divisions: DIVISIONS.length },
     sla: { days: env.sla.days },
@@ -118,7 +123,7 @@ async function start() {
   await migrate();
 
   const caps = capabilities();
-  console.log(`[boot] speech=${caps.speech} translation=${caps.translation} sms=${caps.smsOtp}`);
+  console.log(`[boot] speech=${caps.speech} translation=${caps.translation} llm=${caps.llm} sms=${caps.smsOtp}`);
   if (!caps.translation) {
     console.log('[boot] no translator configured: complaints will be routed and stored in the original language, with no English rendering.');
   }

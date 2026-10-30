@@ -50,6 +50,16 @@ export const env = {
     endpoint: str('AZURE_TRANSLATOR_ENDPOINT', 'https://api.cognitive.microsofttranslator.com'),
   },
 
+  mistral: {
+    key: str('MISTRAL_API_KEY'),
+    apiKey: str('MISTRAL_API_KEY'),
+    // Free Mistral accounts meter quota PER MODEL, and a model can sit at zero
+    // while another on the same key works fine. Keep this configurable so a
+    // dead model is an env change, not a redeploy of code.
+    model: str('MISTRAL_MODEL', 'ministral-8b-latest'),
+    timeoutMs: num('MISTRAL_TIMEOUT_MS', 20_000),
+  },
+
   otp: {
     // n8n owns delivery. We own generation, hashing, expiry and rate limiting.
     webhookUrl: str('N8N_OTP_WEBHOOK_URL'),
@@ -78,7 +88,9 @@ export const env = {
 export function capabilities() {
   return {
     speech: Boolean(env.azureSpeech.key),
-    translation: Boolean(env.azureTranslator.key),
+    // Either provider can produce the English rendering the schema asks for.
+    translation: Boolean(env.azureTranslator.key) || Boolean(env.mistral.apiKey),
+    llm: Boolean(env.mistral.apiKey),
     smsOtp: Boolean(env.otp.webhookUrl),
   };
 }

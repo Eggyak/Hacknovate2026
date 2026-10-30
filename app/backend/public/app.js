@@ -1123,11 +1123,26 @@ function renderTrace(pipeline) {
           : 'No department matched — the citizen was asked to choose.'}</div>
           ${(d.matched || []).length ? `<div class="ev">· matched ${d.matched.map((m) => `<code>${esc(m.term)}</code>`).join(' ')}</div>` : ''}
           ${d.urgent ? '<div class="ev"><span class="badge urgent">urgent terms detected</span></div>' : ''}`;
+      } else if (s.stage === 'llm-adjudication') {
+        if (!d.ran) {
+          body = `<div class="ev">Not consulted — <code>${esc(d.reason || 'unavailable')}</code>.
+            The keyword result stands.</div>`;
+        } else {
+          const div = state.divisions.find((x) => x.id === d.divisionId);
+          body = `<div class="ev">${d.divisionId
+            ? `Chose <b>${esc(div?.name || d.divisionId)}</b> at ${Math.round((d.confidence || 0) * 100)}% confidence.`
+            : 'Found no suitable department either.'}</div>
+            ${d.reason ? `<div class="ev">· ${esc(d.reason)}</div>` : ''}
+            <div class="ev">· ${d.agreedWithLexicon
+              ? 'agrees with the keyword result'
+              : `keyword result was <code>${esc(d.lexiconSaid || 'none')}</code>`}</div>`;
+        }
       } else if (s.stage === 'location-resolution') {
         body = `<div class="ev">PIN ${esc(d.pincode)} resolved to <b>${esc(d.state || 'unknown')}</b>.</div>`;
       }
 
-      const skipped = s.stage === 'translation' && !d.produced;
+      const skipped = (s.stage === 'translation' && !d.produced)
+        || (s.stage === 'llm-adjudication' && !d.ran);
       return `<div class="stage ${skipped ? 'skipped' : ''}">
         <div class="name">${esc(s.stage.replace(/-/g, ' '))}</div>
         <div class="prov">${esc(s.provider)}</div>

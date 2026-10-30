@@ -27,6 +27,7 @@ import { createGrievance, ValidationError, slaFor } from '../services/grievances
 import { divisionById } from '../data/divisions.js';
 import { t } from '../data/phrases.js';
 import { query } from '../lib/db.js';
+import * as mistral from '../services/mistral.js';
 
 export const chatRouter = Router();
 
@@ -179,13 +180,22 @@ chatRouter.post('/:id/submit', async (req, res, next) => {
       );
     }
 
+    // A readable case heading for the docket list. One request, at the single
+    // natural pause in the flow, and the first 120 characters of the complaint
+    // remain a perfectly serviceable fallback.
+    let subject = String(d.originalText).slice(0, 120);
+    if (mistral.configured()) {
+      const s = await mistral.summarise(d.originalText, d.translatedText);
+      if (s.ok) subject = s.subject;
+    }
+
     const { grievance } = await createGrievance({
       citizenId: req.citizen.id,
       divisionId: d.divisionId,
       originalText: d.originalText,
       translatedText: d.translatedText,
       translationProvider: d.translationProvider,
-      subject: String(d.originalText).slice(0, 120),
+      subject,
       detectedLanguage: d.language?.code || conversation.language,
       detectedLocale: d.language?.locale || null,
       languageConfidence: d.language?.confidence || 0,

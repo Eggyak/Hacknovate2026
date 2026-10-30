@@ -15,8 +15,14 @@
  */
 
 import { env } from '../lib/env.js';
+import * as mistral from './mistral.js';
+import { byCode } from '../data/languages.js';
 
 export const PROVIDER = 'azure-translator';
+
+function languageName(code) {
+  return byCode(code)?.name || null;
+}
 
 export function configured() {
   return Boolean(env.azureTranslator.key);
@@ -41,6 +47,32 @@ export async function toEnglish(text, { from = null } = {}) {
   }
 
   if (!configured()) {
+    // No dedicated translator, but an LLM may be available. It is second
+    // choice on purpose - a translation model is better at this than a chat
+    // model - but a faithful English rendering from Mistral is worth far more
+    // than an empty column, and the provider is recorded either way so nobody
+    // has to guess which produced a given record.
+    if (mistral.configured()) {
+      const viaLlm = await mistral.translateToEnglish(clean, languageName(from));
+      if (viaLlm.ok) {
+        return {
+          text: viaLlm.text,
+          provider: `mistral:${viaLlm.model}`,
+          from,
+          skipped: false,
+          reason: null,
+        };
+      }
+      return {
+        text: null,
+        provider: 'mistral',
+        from,
+        skipped: true,
+        reason: `llm_${viaLlm.reason}`,
+        detail: viaLlm.detail,
+      };
+    }
+
     return {
       text: null,
       provider: null,
@@ -149,7 +181,9 @@ export async function fromEnglish(text, to) {
 
 /** Live check for /api/health. */
 export async function probe() {
-  if (!configured()) return { ok: false, reason: 'not_configured' };
-  const r = await toEnglish('नमस्ते', { from: 'hi' });
-  return r.text ? { ok: true } : { ok: false, reason: r.reason, detail: r.detail };
+  if (!configured() && !mistral.configured()) return { ok: false, reason: 'not_configured' };
+  const r = await toEnglish('मेरे पैसे चोरी हो गए', { from: 'hi' });
+  return r.text
+    ? { ok: true, provider: r.provider }
+    : { ok: false, reason: r.reason, detail: r.detail, provider: r.provider };
 }

@@ -17,6 +17,8 @@ import { query } from '../lib/db.js';
 import { detectLanguage } from './languageDetect.js';
 import { classify } from './classifier.js';
 import { toEnglish } from './translate.js';
+import * as mistral from './mistral.js';
+import { env } from '../lib/env.js';
 import { divisionById, fieldsFor } from '../data/divisions.js';
 import { byCode, buildLidCandidates } from '../data/languages.js';
 import { languagesForPincode, stateForPincode, isValidPincode } from '../data/states.js';
@@ -269,9 +271,6 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
       // Classify on the original AND any translation: the native lexicon fires
       // on one, the English lexicon on the other, and both count as evidence.
       const classification = classify([value, translation.text]);
-      draft.classification = classification;
-      draft.divisionId = classification.divisionId;
-      draft.confirmedDivision = false;
       pipeline.steps.push({
         stage: 'classification',
         provider: classification.method,
@@ -283,6 +282,20 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
           urgent: classification.urgent,
         },
       });
+
+      // The lexicon is fast, free and explains itself, so it is always asked
+      // first and its confident answers stand. Only where it is genuinely
+      // undecided is the model consulted - which is also what keeps us inside
+      // a free account's request budget, since most complaints never reach it.
+      const resolved = await adjudicate(classification, {
+        original: value,
+        translated: translation.text,
+        pipeline,
+      });
+
+      draft.classification = resolved;
+      draft.divisionId = resolved.divisionId;
+      draft.confirmedDivision = false;
       break;
     }
 
@@ -342,6 +355,80 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
 
   await save(updated);
   return { conversation: updated, reply, pipeline };
+}
+
+/**
+ * Settle a routing decision the lexicon could not.
+ *
+ * Called only when the keyword pass is undecided. The model is asked to pick
+ * from the fixed list, and its answer is folded in rather than swallowing the
+ * lexicon's:
+ *
+ *   - they agree      confidence rises and the bot stops asking
+ *   - they disagree   the model's answer is used, because the lexicon already
+ *                     said it was unsure, but the citizen is still asked to
+ *                     confirm it
+ *   - model fails     the lexicon's answer stands, unchanged
+ *
+ * `method` always records who actually decided. A grievance routed by a model
+ * must not claim to have been routed by keywords, and vice versa.
+ */
+async function adjudicate(classification, { original, translated, pipeline }) {
+  if (!classification.needsConfirmation) return classification;
+  if (!mistral.configured()) return classification;
+
+  const verdict = await mistral.adjudicateDivision({
+    original,
+    translated,
+    lexicon: classification,
+  });
+
+  if (!verdict.ok) {
+    pipeline.steps.push({
+      stage: 'llm-adjudication',
+      provider: `mistral:${env.mistral.model}`,
+      detail: { ran: false, reason: verdict.reason, detail: verdict.detail },
+    });
+    return classification;
+  }
+
+  const agrees = verdict.divisionId && verdict.divisionId === classification.divisionId;
+  const divisionId = verdict.divisionId || classification.divisionId;
+
+  // Agreement between two independent methods is worth more than either
+  // alone; a lone model answer is not, so it still goes to the citizen.
+  const confidence = agrees
+    ? Math.min(0.95, Math.max(classification.confidence, verdict.confidence) + 0.2)
+    : Math.min(0.9, verdict.confidence);
+
+  pipeline.steps.push({
+    stage: 'llm-adjudication',
+    provider: `mistral:${verdict.model}`,
+    detail: {
+      ran: true,
+      divisionId: verdict.divisionId,
+      confidence: verdict.confidence,
+      reason: verdict.reason,
+      agreedWithLexicon: Boolean(agrees),
+      lexiconSaid: classification.divisionId,
+    },
+  });
+
+  return {
+    ...classification,
+    divisionId,
+    confidence: Math.round(confidence * 100) / 100,
+    needsConfirmation: !agrees || confidence < 0.7,
+    method: agrees
+      ? 'lexicon-and-llm-agreed'
+      : (classification.divisionId ? 'llm-overrode-uncertain-lexicon' : 'llm-resolved-no-lexicon-match'),
+    llm: {
+      model: verdict.model,
+      divisionId: verdict.divisionId,
+      confidence: verdict.confidence,
+      reason: verdict.reason,
+    },
+  };
 }
 
 /** The citizen accepted, corrected or chose the division. */
