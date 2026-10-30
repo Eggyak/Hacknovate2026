@@ -103,8 +103,15 @@ a { color: var(--secondary); }
 
 /* ---------- Layout ---------- */
 
-.wrap { max-width: 1200px; margin: 0 auto; padding: 0 var(--sp-5); }
+.wrap { max-width: none; margin: 0; padding: 0 clamp(14px, 2vw, 32px); }
 @media (max-width: 720px) { .wrap { padding: 0 var(--sp-4); } }
+
+/*
+ * Reading views still need a measure - a grievance narrative set 1800px wide
+ * is unreadable - so they opt back in. The gateway and the dashboard want the
+ * width; prose does not.
+ */
+.measure { max-width: 1100px; margin-inline: auto; }
 
 .tricolour { height: 3px; background: linear-gradient(90deg, #ff9933 0 33%, #ffffff 33% 66%, #138808 66%); }
 
@@ -137,7 +144,7 @@ nav.main a.on { background: var(--primary); color: #fff; }
 
 .spacer { flex: 1; }
 
-main { padding: var(--sp-6) 0 var(--sp-7); min-height: 60vh; }
+main { padding: var(--sp-5) 0 var(--sp-6); min-height: 50vh; }
 
 /* ---------- Government chrome ---------- */
 
@@ -149,7 +156,7 @@ main { padding: var(--sp-6) 0 var(--sp-7); min-height: 60vh; }
 }
 .goi-inner {
   display: flex; align-items: center; justify-content: space-between;
-  gap: var(--sp-3); flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px;
+  gap: var(--sp-3); flex-wrap: wrap; padding-top: 5px; padding-bottom: 5px;
 }
 .goi-id { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .goi-id b { color: #fff; font-weight: 700; }
@@ -173,9 +180,9 @@ main { padding: var(--sp-6) 0 var(--sp-7); min-height: 60vh; }
 .textsize button:hover { background: rgba(255,255,255,0.18); }
 .textsize button[aria-pressed='true'] { background: var(--gold); color: var(--ink-900); border-color: var(--gold); }
 
-header.app .bar { height: auto; min-height: 68px; padding: 10px 0; }
+header.app .bar { height: auto; min-height: 58px; padding: 7px 0; }
 .brand .seal {
-  width: 46px; height: 46px; border-radius: 8px;
+  width: 40px; height: 40px; border-radius: 8px;
   background: var(--ink-900); color: #fff;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 1px; flex: none; line-height: 1;
@@ -198,16 +205,30 @@ header.app .tricolour {
 .langpick {
   display: inline-flex; align-items: center; gap: 6px;
   border: 1.5px solid var(--line-2); border-radius: var(--r);
-  padding: 0 10px; min-height: 40px; background: #fff;
+  padding: 0 9px; min-height: 36px; background: #fff;
 }
 .langpick select {
-  border: 0; min-height: 36px; padding: 0 4px; background: transparent;
+  border: 0; min-height: 32px; padding: 0 4px; background: transparent;
   font-size: 13.5px; font-weight: 600; cursor: pointer; width: auto; min-width: 120px;
 }
 .langpick select:focus { box-shadow: none; }
 
+/*
+ * On the gateway the footer is collapsed to a single line. It still carries
+ * the attribution a government portal needs, but the sign-in form must not
+ * sit below the fold to make room for a link list nobody is there for.
+ */
+body.auth-mode main { padding-top: var(--sp-3); padding-bottom: 0; }
+body.auth-mode footer.site { margin-top: 0; }
+body.auth-mode .foot-inner { padding-top: 10px; padding-bottom: 10px; }
+body.auth-mode .foot-id span span,
+body.auth-mode .foot-note { display: none; }
+body.auth-mode .goi-seal { width: 30px; height: 30px; font-size: 10px; }
+body.auth-mode .foot-id b { font-size: 12.5px; }
+body.auth-mode .foot-links a { font-size: 12px; }
+
 footer.site {
-  margin-top: var(--sp-7);
+  margin-top: var(--sp-6);
   background: var(--ink-900);
   color: #c3d1e4;
   font-size: 13px;
@@ -261,7 +282,7 @@ footer.site {
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
-  min-height: 44px; padding: 10px 18px;
+  min-height: 42px; padding: 9px 18px;
   border-radius: var(--r); border: 1px solid transparent;
   font-family: inherit; font-size: 14.5px; font-weight: 600; line-height: 1;
   cursor: pointer; text-decoration: none; transition: background 0.14s, border-color 0.14s;
@@ -279,7 +300,7 @@ footer.site {
 
 /* ---------- Forms ---------- */
 
-.field { margin-bottom: var(--sp-4); }
+.field { margin-bottom: var(--sp-3); }
 .field > label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: var(--ink); }
 .field .hint { font-size: 12.5px; color: var(--ink-3); margin-top: 5px; }
 .field .err { font-size: 12.5px; color: var(--danger); margin-top: 5px; font-weight: 600; }
@@ -287,8 +308,8 @@ footer.site {
 input[type='text'], input[type='tel'], input[type='email'], input[type='number'],
 input[type='date'], input[type='datetime-local'], select, textarea {
   width: 100%;
-  min-height: 46px;
-  padding: 11px 13px;
+  min-height: 42px;
+  padding: 9px 12px;
   font-family: inherit; font-size: 15px; color: var(--ink);
   background: #fff;
   border: 1.5px solid var(--line-2);
@@ -336,9 +357,16 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 .auth {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr);
-  gap: var(--sp-5);
+  gap: var(--sp-4);
   align-items: stretch;
-  padding: var(--sp-5) 0 var(--sp-6);
+  /*
+   * Sized to what is left of the viewport after the government chrome, so the
+   * gateway is one screen with nothing below the fold. min-height, not height:
+   * on a short laptop it still grows and scrolls rather than clipping the
+   * form, which would be worse than a scrollbar.
+   */
+  min-height: calc(100dvh - 165px);
+  padding: 0 0 var(--sp-3);
 }
 @media (max-width: 1040px) {
   .auth { grid-template-columns: 1fr; }
@@ -352,18 +380,18 @@ input[aria-invalid='true'] { border-color: var(--danger); }
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: var(--r-lg);
-  padding: var(--sp-6);
+  padding: var(--sp-5) var(--sp-5) var(--sp-4);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
+  gap: 10px;
 }
 .pitch .eyebrow {
   align-self: flex-start;
   display: inline-flex; align-items: center; gap: var(--sp-2);
   background: rgba(255, 255, 255, 0.07);
   border: 1px solid var(--panel-line);
-  padding: 7px 14px; border-radius: var(--r-full);
-  font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  padding: 5px 12px; border-radius: var(--r-full);
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
   color: #dbe6f5;
 }
 .pitch .eyebrow::before {
@@ -372,37 +400,37 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 }
 .pitch .eyebrow .sep { opacity: 0.35; }
 
-.pitch h1 { font-size: 36px; font-weight: 800; line-height: 1.16; color: #fff; }
+.pitch h1 { font-size: clamp(25px, 2.1vw, 33px); font-weight: 800; line-height: 1.13; color: #fff; }
 .pitch h1 .gold { color: var(--gold); display: block; }
-.pitch .hi { font-size: 19px; font-weight: 700; color: var(--gold); font-family: var(--font); }
-.pitch .lede { color: var(--panel-ink); font-size: 14.5px; line-height: 1.75; margin: 0; }
+.pitch .hi { font-size: 17px; font-weight: 700; color: var(--gold); font-family: var(--font); margin-top: -2px; }
+.pitch .lede { color: var(--panel-ink); font-size: 13.5px; line-height: 1.6; margin: 0; }
 
 .pitch .feat {
   display: flex; gap: var(--sp-3);
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--panel-line);
-  border-radius: var(--r); padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r); padding: 10px 13px;
 }
 .pitch .feat .ico {
-  width: 38px; height: 38px; flex: none; border-radius: 9px;
-  display: grid; place-items: center; font-size: 17px;
+  width: 32px; height: 32px; flex: none; border-radius: 8px;
+  display: grid; place-items: center; font-size: 15px;
 }
 .pitch .feat .ico.a { background: rgba(99, 132, 255, 0.18); }
 .pitch .feat .ico.b { background: rgba(34, 170, 110, 0.18); }
 .pitch .feat .ico.c { background: rgba(225, 88, 0, 0.20); }
-.pitch .feat b { display: block; font-size: 15px; margin-bottom: 2px; color: #fff; font-family: var(--display); }
-.pitch .feat span { font-size: 13px; color: #a9bbd2; line-height: 1.6; }
+.pitch .feat b { display: block; font-size: 14px; margin-bottom: 1px; color: #fff; font-family: var(--display); }
+.pitch .feat span { font-size: 12.2px; color: #a9bbd2; line-height: 1.5; }
 
 .pitch .figures {
   display: grid; grid-template-columns: repeat(3, 1fr);
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--panel-line);
-  border-radius: var(--r); padding: var(--sp-4) 0; text-align: center;
+  border-radius: var(--r); padding: 12px 0; text-align: center;
   margin-top: auto;
 }
 .pitch .figures div + div { border-left: 1px solid var(--panel-line); }
 .pitch .figures b {
-  display: block; font-size: 26px; font-weight: 800;
+  display: block; font-size: 22px; font-weight: 800;
   letter-spacing: -0.03em; font-family: var(--display); color: #fff;
 }
 .pitch .figures div:last-child b { color: var(--gold); }
@@ -412,8 +440,8 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 }
 
 .pitch .trust {
-  display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-5);
-  padding-top: var(--sp-3); border-top: 1px solid var(--panel-line);
+  display: flex; flex-wrap: wrap; gap: 6px var(--sp-4);
+  padding-top: 10px; border-top: 1px solid var(--panel-line);
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em;
   text-transform: uppercase; color: #8fa3bd;
 }
@@ -424,9 +452,11 @@ input[aria-invalid='true'] { border-color: var(--danger); }
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-2);
-  padding: var(--sp-6);
+  padding: var(--sp-5);
   align-self: center;
   width: 100%;
+  max-width: 620px;
+  margin-inline: auto;
 }
 @media (max-width: 560px) { .authcard { padding: var(--sp-5) var(--sp-4); } }
 
@@ -439,8 +469,8 @@ input[aria-invalid='true'] { border-color: var(--danger); }
   content: ''; width: 6px; height: 6px; border-radius: var(--r-full);
   background: var(--secondary);
 }
-.authcard h1 { font-size: 28px; font-weight: 800; margin: 8px 0 4px; }
-.authcard .sub { font-size: 14px; color: var(--ink-2); margin: 0 0 20px; line-height: 1.6; }
+.authcard h1 { font-size: 25px; font-weight: 800; margin: 6px 0 3px; }
+.authcard .sub { font-size: 13.5px; color: var(--ink-2); margin: 0 0 14px; line-height: 1.5; }
 .authcard .sub .hi { color: var(--ink-3); }
 
 /* Segmented Login / Create Account switch. */
@@ -451,7 +481,7 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 }
 .segs button {
   display: flex; align-items: center; justify-content: center; gap: var(--sp-2);
-  min-height: 46px; border: 0; border-radius: var(--r);
+  min-height: 42px; border: 0; border-radius: var(--r);
   background: transparent; color: var(--ink-2);
   font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer;
 }
@@ -468,7 +498,7 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 
 .phone-row .cc {
   flex-direction: column; justify-content: center; gap: 0;
-  min-width: 58px; padding: 0 10px; line-height: 1.1;
+  min-width: 54px; min-height: 42px; padding: 0 9px; line-height: 1.1;
 }
 .phone-row .cc small { font-size: 9.5px; font-weight: 700; color: var(--ink-3); letter-spacing: 0.06em; }
 
@@ -477,7 +507,7 @@ input[aria-invalid='true'] { border-color: var(--danger); }
   display: flex; align-items: center; justify-content: space-between;
   gap: var(--sp-3); flex-wrap: wrap;
   background: var(--amber-bg); border: 1px solid var(--amber-line);
-  border-radius: var(--r); padding: 11px 14px; font-size: 13px;
+  border-radius: var(--r); padding: 9px 13px; font-size: 12.5px;
 }
 .vstrip.done { background: var(--success-soft); border-color: #bbf7d0; }
 .vstrip .how { font-size: 12px; color: var(--ink-3); }
@@ -496,8 +526,8 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 
 .authcard .swap {
   border-top: 1px solid var(--line);
-  margin-top: var(--sp-5); padding-top: var(--sp-4);
-  text-align: center; font-size: 13.5px; color: var(--ink-3);
+  margin-top: var(--sp-4); padding-top: var(--sp-3);
+  text-align: center; font-size: 13px; color: var(--ink-3);
 }
 .authcard .swap button {
   background: none; border: 0; padding: 0 0 0 4px; cursor: pointer;
@@ -512,10 +542,10 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 
 /* Emergency routing note. Not decoration: 1930 is the live cybercrime line. */
 .emergency {
-  margin-top: var(--sp-4);
+  margin-top: var(--sp-3);
   background: var(--surface-2); border: 1px solid var(--line);
-  border-radius: var(--r); padding: 13px 16px;
-  font-size: 12.5px; color: var(--ink-2); text-align: center; line-height: 1.6;
+  border-radius: var(--r); padding: 10px 14px;
+  font-size: 12px; color: var(--ink-2); text-align: center; line-height: 1.5;
 }
 .emergency b { color: var(--ink); font-variant-numeric: tabular-nums; }
 

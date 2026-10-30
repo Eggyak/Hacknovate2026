@@ -1470,6 +1470,7 @@ async function viewDetail(reference) {
   const fieldLabel = (key) => (g.division?.fields || []).find((f) => f.key === key)?.label || key;
 
   setView(`
+    <div class="measure">
     <a class="small muted" href="#/grievances">&larr; My grievances</a>
     <div class="row between wrap mt-3 mb-4">
       <div>
@@ -1550,6 +1551,7 @@ async function viewDetail(reference) {
           </tbody></table>
         </div>
       </div>
+    </div>
     </div>`);
 }
 
@@ -1697,8 +1699,11 @@ function viewProfile() {
 async function route() {
   const hash = location.hash || '#/';
 
+  const onGateway = !state.citizen && (hash === '#/signin' || hash === '#/signup');
+  document.body.classList.toggle('auth-mode', onGateway);
+
   if (!state.citizen && hash !== '#/track') {
-    if (hash !== '#/signin' && hash !== '#/signup') { location.hash = '#/signin'; return; }
+    if (!onGateway) { location.hash = '#/signin'; return; }
     renderChrome();
     viewAuth(hash === '#/signup' ? 'signup' : 'signin');
     return;
