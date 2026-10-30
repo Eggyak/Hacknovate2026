@@ -221,21 +221,39 @@ let wardCache = null;
 let wardCachedAt = 0;
 const WARD_TTL_MS = 10 * 60 * 1000;
 
-/** Their ward list, cached - it changes about never. */
+/**
+ * Their ward list, cached - it changes about never.
+ *
+ * A stale copy is served when the refresh fails. The list is effectively
+ * static reference data, and letting a momentary hiccup fetching it block a
+ * citizen's complaint from reaching a desk would be the wrong way round.
+ * Only a cold cache with no fetch is a real failure.
+ */
 export async function fetchWards() {
   const now = Date.now();
   if (wardCache && now - wardCachedAt < WARD_TTL_MS) return wardCache;
 
-  const res = await fetch(`${env.govt.baseUrl}/api/intake/wards`, {
-    headers: serviceHeaders(),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) throw new Error(`ward list unavailable (HTTP ${res.status})`);
+  try {
+    const res = await fetch(`${env.govt.baseUrl}/api/intake/wards`, {
+      headers: serviceHeaders(),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`ward list unavailable (HTTP ${res.status})`);
 
-  const data = await res.json();
-  wardCache = Array.isArray(data.wards) ? data.wards : [];
-  wardCachedAt = now;
-  return wardCache;
+    const data = await res.json();
+    const wards = Array.isArray(data.wards) ? data.wards : [];
+    if (wards.length === 0) throw new Error('ward list came back empty');
+
+    wardCache = wards;
+    wardCachedAt = now;
+    return wardCache;
+  } catch (err) {
+    if (wardCache) {
+      console.warn(`[govt] ward list refresh failed (${err.message}); using the cached copy`);
+      return wardCache;
+    }
+    throw err;
+  }
 }
 
 function serviceHeaders() {

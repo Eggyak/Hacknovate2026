@@ -87,7 +87,37 @@ app.get('/api/bootstrap',requireAuth,(req,res)=>{
   res.json({user:req.user,role:req.role,tickets,roles,users,wards,activities});
 });
 app.get('/api/tickets',requireAuth,requirePermission('tickets:read'),(req,res)=>{const scope=ticketScope(req);res.json(db.prepare(`SELECT * FROM tickets${scope.sql} ORDER BY submission_timestamp DESC LIMIT 500`).all(...scope.params).map(row=>ticketForRole(row,req)));});
-const intakeLimiter=rateLimit({windowMs:60*60*1000,limit:20,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Intake limit reached. Please try again later.'}});
+/*
+ * Two intake limits, because there are two kinds of caller.
+ *
+ * The 20-per-IP-per-hour ceiling is right for anonymous public submissions
+ * and badly wrong for the citizen portal, which is a single IP carrying
+ * everybody. Left as it was, the whole country would have been throttled at
+ * twenty complaints an hour - and it was: a ward lookup returned 429 and a
+ * real complaint went unforwarded.
+ *
+ * A caller holding the shared service key is a different trust class: it is
+ * an authenticated service, not an unknown browser, and it already validated
+ * and stored the complaint before forwarding it. It gets its own, much
+ * larger budget. Anonymous callers are unaffected.
+ */
+const anonymousIntakeLimiter=rateLimit({windowMs:60*60*1000,limit:20,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Intake limit reached. Please try again later.'}});
+const serviceIntakeLimiter=rateLimit({windowMs:60*60*1000,limit:2000,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Service intake limit reached.'}});
+
+function hasServiceKey(req){
+  const expected=process.env.MHA_INTAKE_SERVICE_KEY??'';
+  if(!expected)return false;
+  const given=String(req.get('x-service-key')??'');
+  const a=createHash('sha256').update(given).digest();
+  const b=createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a,b);
+}
+
+// Pick the limiter from who is calling, before either one counts the request.
+const intakeLimiter=(req,res,next)=>(hasServiceKey(req)?serviceIntakeLimiter:anonymousIntakeLimiter)(req,res,next);
+
+// Read-only and key-gated, so they never share the public submission budget.
+const serviceReadLimiter=rateLimit({windowMs:60*60*1000,limit:2000,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Service read limit reached.'}});
 const categoryDivisions=Object.fromEntries(divisions.map(([divisionId,,category])=>[category,divisionId]));
 /*
  * Service-to-service endpoints for the citizen portal.
@@ -111,20 +141,16 @@ const categoryDivisions=Object.fromEntries(divisions.map(([divisionId,,category]
  * fails shut rather than open.
  */
 function requireServiceKey(req,res,next){
-  const expected=process.env.MHA_INTAKE_SERVICE_KEY??'';
-  if(!expected)return res.status(503).json({error:'Service integration is not configured.'});
-  const given=String(req.get('x-service-key')??'');
-  const a=createHash('sha256').update(given).digest();
-  const b=createHash('sha256').update(expected).digest();
-  if(!timingSafeEqual(a,b))return res.status(401).json({error:'Not authorised.'});
+  if(!(process.env.MHA_INTAKE_SERVICE_KEY??''))return res.status(503).json({error:'Service integration is not configured.'});
+  if(!hasServiceKey(req))return res.status(401).json({error:'Not authorised.'});
   return next();
 }
 
-app.get('/api/intake/wards',intakeLimiter,requireServiceKey,(_req,res)=>{
+app.get('/api/intake/wards',serviceReadLimiter,requireServiceKey,(_req,res)=>{
   res.json({wards:wardsList.all().map(w=>({id:w.id,name:w.name,district:w.district,state:w.state,pincodePrefix:w.pincode_prefix,zone:w.zone}))});
 });
 
-app.get('/api/intake/status/:grievanceId',intakeLimiter,requireServiceKey,(req,res)=>{
+app.get('/api/intake/status/:grievanceId',serviceReadLimiter,requireServiceKey,(req,res)=>{
   const row=db.prepare('SELECT grievance_id,division_id,category,status,sla_status,submission_timestamp,sla_deadline,action_taken_report,updated_at FROM tickets WHERE grievance_id=?').get(String(req.params.grievanceId));
   if(!row)return res.status(404).json({error:'No case with that grievance id.'});
   res.json({
