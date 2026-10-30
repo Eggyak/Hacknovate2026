@@ -20,7 +20,8 @@ app.use(express.json({limit:'256kb'}));
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
 function parseCookie(req,name){const item=(req.headers.cookie??'').split(';').map(s=>s.trim()).find(s=>s.startsWith(`${name}=`));return item?decodeURIComponent(item.slice(name.length+1)):null;}
-function sessionUser(req){const token=parseCookie(req,cookieName);if(!token)return null;const row=db.prepare('SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?').get(hash(token),Date.now());if(!row)return null;const user=toUser(getUserById.get(row.user_id));if(!user?.isActive)return null;return user;}
+function sessionToken(req){const match=String(req.headers.authorization??'').match(/^Bearer\s+(.+)$/i);return match?.[1]??null;}
+function sessionUser(req){const token=sessionToken(req);if(!token)return null;const row=db.prepare('SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?').get(hash(token),Date.now());if(!row)return null;const user=toUser(getUserById.get(row.user_id));if(!user?.isActive)return null;return user;}
 function requireAuth(req,res,next){const user=sessionUser(req);if(!user)return res.status(401).json({error:'Sign in is required.'});const credentials=getUserById.get(user.id);const allowedDuringPasswordChange=['/api/auth/change-password','/api/auth/logout'];if(credentials?.must_change_password&&!allowedDuringPasswordChange.includes(req.originalUrl.split('?')[0]))return res.status(403).json({error:'Change your temporary password before using the workspace.'});req.user=user;req.role=toRole(getRoleById.get(user.roleId));if(!req.role)return res.status(403).json({error:'No active role is assigned to this account.'});next();}
 function requirePermission(permission){return (req,res,next)=>{if(!req.role.permissions.includes(permission))return res.status(403).json({error:`The ${permission} permission is required.`});next();};}
 function requireSuperAdmin(req,res,next){if(req.user.roleId!=='ROLE-SUPER-ADMIN')return res.status(403).json({error:'Super Admin access is required.'});next();}
@@ -50,11 +51,10 @@ app.post('/api/auth/login',(req,res)=>{
   const role=toRole(getRoleById.get(row.role_id));if(!role)return res.status(403).json({error:'No active role is assigned to this account.'});
   const token=randomBytes(32).toString('base64url');const expires=Date.now()+sessionLifetime;const now=new Date().toISOString();
   db.transaction(()=>{db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)').run(hash(token),row.id,expires,Date.now());db.prepare('UPDATE users SET last_sign_in=? WHERE id=?').run(now,row.id);audit(row.id,'SIGN_IN',`${row.name} signed in.`);})();
-  res.cookie(cookieName,token,{httpOnly:true,sameSite:'strict',secure:process.env.NODE_ENV==='production',path:'/',maxAge:sessionLifetime});
-  const user=toUser(getUserById.get(row.id));res.json({user,role,mustChangePassword:Boolean(row.must_change_password)});
+  const user=toUser(getUserById.get(row.id));res.json({user,role,mustChangePassword:Boolean(row.must_change_password),token});
 });
 app.get('/api/auth/me',requireAuth,(req,res)=>res.json({user:req.user,role:req.role}));
-app.post('/api/auth/logout',requireAuth,(req,res)=>{const token=parseCookie(req,cookieName);db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(token));audit(req.user.id,'SIGN_OUT',`${req.user.name} signed out.`);res.clearCookie(cookieName,{httpOnly:true,sameSite:'strict',secure:process.env.NODE_ENV==='production',path:'/'});res.json({ok:true});});
+app.post('/api/auth/logout',requireAuth,(req,res)=>{const token=sessionToken(req);db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(token));audit(req.user.id,'SIGN_OUT',`${req.user.name} signed out.`);res.json({ok:true});});
 app.post('/api/auth/change-password',requireAuth,(req,res)=>{const current=String(req.body?.currentPassword??'');const next=String(req.body?.newPassword??'');if(next.length<8||next.length>200)return res.status(400).json({error:'New password must contain at least 8 characters.'});const row=getUserById.get(req.user.id);if(!bcrypt.compareSync(current,row.password_hash))return res.status(400).json({error:'Current password is incorrect.'});db.transaction(()=>{db.prepare('UPDATE users SET password_hash=?,must_change_password=0,password_reset_at=NULL WHERE id=?').run(bcrypt.hashSync(next,12),req.user.id);audit(req.user.id,'PASSWORD_CHANGED','Account password changed.');})();res.json({ok:true});});
 app.post('/api/auth/forgot-password',(req,res)=>{const email=String(req.body?.email??'').trim().toLowerCase();if(email.length>254||!/^\S+@\S+\.\S+$/.test(email))return res.status(400).json({error:'Enter a valid department email.'});const row=userByEmail.get(email);if(row?.is_active)audit(row.id,'PASSWORD_RECOVERY_REQUESTED','Password recovery requested.');res.json({message:'If this active account exists, a password reset request has been recorded. Contact your Super Admin to issue a new temporary password.'});});
 
@@ -101,7 +101,7 @@ app.post('/api/roles',requireAuth,requireSuperAdmin,(req,res)=>{
   const id=`ROLE-CUSTOM-${randomUUID()}`;try{db.prepare('INSERT INTO roles(id,name,description,permissions_json,scope_type,division_id,ward_ids_json,is_system) VALUES(?,?,?,?,?,?,?,0)').run(id,name,description,JSON.stringify(perms),scopeType,scopeType==='DIVISION'?divisionId:null,JSON.stringify(scopeType==='WARD'?wardIds:[]));audit(req.user.id,'ROLE_CREATED',`${name} role created.`,null,{scopeType});res.status(201).json(toRole(getRoleById.get(id)));}catch(error){if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'A role with that name already exists.'});throw error;}
 });
 app.patch('/api/roles/:id',requireAuth,requireSuperAdmin,(req,res)=>{
-  const current=getRoleById.get(req.params.id);if(!current)return res.status(404).json({error:'Role not found.'});if(current.is_system)return res.status(400).json({error:'System roles are protected. Create a custom role to change permissions.'});
+  const current=getRoleById.get(req.params.id);if(!current)return res.status(404).json({error:'Role not found.'});
   const name=String(req.body?.name??'').trim();const description=String(req.body?.description??'').trim();const perms=req.body?.permissions;
   if(name.length<2||name.length>80||!Array.isArray(perms)||perms.some(permission=>!permissions.includes(permission)))return res.status(400).json({error:'Enter a valid role name and permission list.'});
   try{db.prepare('UPDATE roles SET name=?,description=?,permissions_json=? WHERE id=?').run(name,description,JSON.stringify([...new Set(perms)]),current.id);audit(req.user.id,'ROLE_UPDATED',`${name} permissions updated.`,null,{roleId:current.id});res.json(toRole(getRoleById.get(current.id)));}catch(error){if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'A role with that name already exists.'});throw error;}
@@ -118,8 +118,12 @@ app.post('/api/users',requireAuth,requireSuperAdmin,(req,res)=>{
 app.patch('/api/users/:id',requireAuth,requireSuperAdmin,(req,res)=>{
   const target=getUserById.get(req.params.id);if(!target)return res.status(404).json({error:'Account not found.'});
   if(target.id===req.user.id&&req.body?.isActive===false)return res.status(400).json({error:'Sign out before deactivating your own account.'});
-  const active=req.body?.isActive;if(typeof active!=='boolean')return res.status(400).json({error:'Provide an account active state.'});
-  db.transaction(()=>{db.prepare('UPDATE users SET is_active=? WHERE id=?').run(active?1:0,target.id);if(!active)db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);audit(req.user.id,active?'USER_ACTIVATED':'USER_SUSPENDED',`${target.name} account ${active?'activated':'suspended'}.`);})();
+  const active=req.body?.isActive;const name=String(req.body?.name??target.name).trim();const email=String(req.body?.email??target.email).trim().toLowerCase();const roleId=String(req.body?.roleId??target.role_id);const role=getRoleById.get(roleId);
+  if(typeof active!=='boolean'&&req.body?.name===undefined&&req.body?.email===undefined&&req.body?.roleId===undefined)return res.status(400).json({error:'Provide account fields to update.'});
+  if(name.length<2||name.length>100||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!role)return res.status(400).json({error:'Enter valid account details and choose a role.'});
+  if(target.role_id==='ROLE-SUPER-ADMIN'&&roleId!=='ROLE-SUPER-ADMIN')return res.status(400).json({error:'The Super Admin account is protected.'});
+  const isActive=typeof active==='boolean'?active:Boolean(target.is_active);
+  try{db.transaction(()=>{db.prepare('UPDATE users SET name=?,email=?,role_id=?,is_active=? WHERE id=?').run(name,email,roleId,isActive?1:0,target.id);if(!isActive)db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);audit(req.user.id,'USER_UPDATED',`${name} account updated.`,null,{roleId,isActive});})();}catch(error){if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'An account with that email already exists.'});throw error;}
   res.json(publicAccount(getUserById.get(target.id)));
 });
 app.post('/api/users/:id/reset-password',requireAuth,requireSuperAdmin,(req,res)=>{

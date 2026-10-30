@@ -575,3 +575,11 @@ tbody tr:hover { background: #fafbf9; }
   .stat-grid { grid-template-columns: 1fr; }
   .toolbar > .input, .toolbar > .select { width: 100%; }
 }
+/* Requested masthead refinements */
+.masthead{height:72px!important;min-height:72px!important;padding-block:8px!important}
+.live-badge{display:none!important}
+.notification-menu{display:none!important}
+.user-block{gap:14px!important}
+/* Hide the browser-visible page scrollbar while preserving scrolling. */
+html,body,#root{scrollbar-width:none!important;-ms-overflow-style:none!important}
+html::-webkit-scrollbar,body::-webkit-scrollbar,#root::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}

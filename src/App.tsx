@@ -48,11 +48,13 @@ function save(key: string, value: unknown) {
 }
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const tabToken = sessionStorage.getItem('mha-tab-session');
   const response = await fetch(path, {
     ...init,
-    credentials: 'same-origin',
+    credentials: 'omit',
     headers: {
       ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(tabToken ? { Authorization: `Bearer ${tabToken}` } : {}),
       ...init.headers,
     },
   });
@@ -103,6 +105,7 @@ function prettyKey(key: string) {
 export default function App() {
   const [roles, setRoles] = useState<Role[]>(initialRoles);
   const [users, setUsers] = useState<User[]>([]);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [wardList, setWardList] = useState(initialWards);
   const [activities, setActivities] = useState<ActivityEvent[]>([]);
@@ -151,11 +154,33 @@ export default function App() {
   // Scroll listener for back-to-top button
   useEffect(() => {
     const handleScroll = () => {
-      setShowBackToTop(window.scrollY > 240);
+      const scrollTop = Math.max(window.scrollY, document.documentElement.scrollTop, document.body.scrollTop);
+      setShowBackToTop(scrollTop > 240);
     };
     window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
+    document.addEventListener('scroll', handleScroll, true);
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      document.removeEventListener('scroll', handleScroll, true);
+    };
   }, []);
+
+  const scrollPageToTop = () => {
+    const targets = new Set<HTMLElement>();
+    if (document.scrollingElement instanceof HTMLElement) targets.add(document.scrollingElement);
+    targets.add(document.documentElement);
+    targets.add(document.body);
+    const root = document.getElementById('root');
+    if (root) targets.add(root);
+    let node = document.querySelector('.masthead') as HTMLElement | null;
+    while (node) {
+      targets.add(node);
+      node = node.parentElement;
+    }
+    targets.forEach((target) => { target.scrollTop = 0; target.scrollLeft = 0; });
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    document.querySelector('.masthead')?.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' });
+  };
 
   // Hydrate data
   const hydrate = async () => {
@@ -256,10 +281,11 @@ export default function App() {
   // Actions
   const signIn = async (email: string, password: string) => {
     try {
-      const result = await api<{ user: User; role: Role; mustChangePassword: boolean }>('/api/auth/login', {
+      const result = await api<{ user: User; role: Role; mustChangePassword: boolean; token: string }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });
+      sessionStorage.setItem('mha-tab-session', result.token);
       if (result.mustChangePassword) {
         setSessionUser(result.user);
         setSessionRole(result.role);
@@ -279,6 +305,7 @@ export default function App() {
     try {
       await api('/api/auth/logout', { method: 'POST' });
     } finally {
+      sessionStorage.removeItem('mha-tab-session');
       setSessionUser(null);
       setSessionRole(null);
       setTickets([]);
@@ -350,6 +377,20 @@ export default function App() {
     }
   };
 
+  const saveUserEdit = async (user: User) => {
+    try {
+      const saved = await api<User>(`/api/users/${encodeURIComponent(user.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: user.name, email: user.email, roleId: user.roleId, isActive: user.isActive }),
+      });
+      setUsers((current) => current.map((item) => item.id === saved.id ? saved : item));
+      setEditingUser(null);
+      setToast(`Account changes saved for ${saved.name}.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Could not save account changes.');
+    }
+  };
+
   const resetPassword = async (user: User) => {
     try {
       const result = await api<{ temporaryPassword: string }>(`/api/users/${encodeURIComponent(user.id)}/reset-password`, {
@@ -376,8 +417,15 @@ export default function App() {
     }
   };
 
+  const cloneRole = async () => {
+    if (!currentRole) return;
+    const name = window.prompt(`Name for the copy of “${currentRole.name}”:`, `${currentRole.name} Copy`);
+    if (!name?.trim()) return;
+    await addRole({ ...currentRole, id: `ROLE-CUSTOM-${Date.now()}`, name: name.trim(), isSystem: false });
+  };
+
   const updateRole = async () => {
-    if (!currentRole || currentRole.isSystem) return;
+    if (!currentRole) return;
     try {
       const saved = await api<Role>(`/api/roles/${encodeURIComponent(currentRole.id)}`, {
         method: 'PATCH',
@@ -781,6 +829,7 @@ export default function App() {
                             </option>
                           ))}
                         </select>
+                        <button className="button button-quiet button-small" onClick={cloneRole}>Clone</button>
                         {(query || statusFilter !== 'ALL' || divisionFilter !== 'ALL') && (
                           <button
                             className="button button-quiet button-small"
@@ -930,19 +979,28 @@ export default function App() {
                               </td>
                               <td>
                                 <div className="row-actions">
-                                  <button
-                                    className="button button-quiet button-small"
-                                    onClick={() => resetPassword(person)}
-                                  >
-                                    Reset password
-                                  </button>
-                                  <button
-                                    className={`button ${person.isActive ? 'button-danger' : 'button-quiet'} button-small`}
-                                    disabled={person.id === sessionUser.id}
-                                    onClick={() => toggleUser(person)}
-                                  >
-                                    {person.isActive ? 'Suspend' : 'Reactivate'}
-                                  </button>
+                                  {person.roleId === 'ROLE-SUPER-ADMIN' ? (
+                                    <span className="table-secondary">Protected account</span>
+                                  ) : (
+                                    <>
+                                      <button className="button button-quiet button-small" onClick={() => setEditingUser(person)}>
+                                        Edit
+                                      </button>
+                                      <button className="button button-quiet button-small" onClick={() => resetPassword(person)}>
+                                        Reset password
+                                      </button>
+                                      <button
+                                        className={`button ${person.isActive ? 'button-danger' : 'button-quiet'} button-small`}
+                                        disabled={person.id === sessionUser.id}
+                                        onClick={() => toggleUser(person)}
+                                      >
+                                        {person.isActive ? 'Suspend' : 'Reactivate'}
+                                      </button>
+                                      <button className="button button-danger button-small" onClick={() => setToast('Account removal is not available yet.')}>
+                                        Remove
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               </td>
                             </tr>
@@ -999,7 +1057,6 @@ export default function App() {
                               <input
                                 className="input"
                                 value={roleName}
-                                disabled={currentRole.isSystem}
                                 onChange={(e) => setRoleName(e.target.value)}
                               />
                             </div>
@@ -1031,7 +1088,6 @@ export default function App() {
                                 <span>{label}</span>
                                 <input
                                   type="checkbox"
-                                  disabled={currentRole.isSystem}
                                   checked={rolePermissions.includes(perm)}
                                   onChange={() =>
                                     setRolePermissions((curr) =>
@@ -1046,14 +1102,12 @@ export default function App() {
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span className="table-secondary">
                               {currentRole.isSystem
-                                ? 'System roles are protected. Create a custom role to configure custom permissions.'
+                                ? 'System role. Super Admin can edit this role and its permissions.'
                                 : `${rolePermissions.length} permissions enabled.`}
                             </span>
-                            {!currentRole.isSystem && (
-                              <button className="button button-primary" onClick={updateRole}>
-                                Save permissions
-                              </button>
-                            )}
+                            <button className="button button-primary" onClick={updateRole}>
+                              Save permissions
+                            </button>
                           </div>
                         </>
                       )}
@@ -1288,6 +1342,17 @@ export default function App() {
       )}
 
       {/* Modal: Add Staff */}
+      {editingUser && (
+        <div className="dialog-backdrop" onClick={() => setEditingUser(null)}>
+          <div className="dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-head">
+              <h2>Edit staff account</h2>
+              <button type="button" className="button button-quiet button-small" onClick={() => setEditingUser(null)}>Close</button>
+            </div>
+            <EditStaffForm user={editingUser} roles={roles} onClose={() => setEditingUser(null)} onSave={saveUserEdit} />
+          </div>
+        </div>
+      )}
       {modal === 'user' && (
         <div className="dialog-backdrop" onClick={() => setModal(null)}>
           <div className="dialog" onClick={(e) => e.stopPropagation()}>
@@ -1489,7 +1554,7 @@ export default function App() {
         className="back-to-top"
         type="button"
         hidden={!showBackToTop}
-        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+        onClick={scrollPageToTop}
       >
         ↑ <span>Top</span>
       </button>
@@ -1894,6 +1959,22 @@ function TicketDrawer({
       </footer>
     </aside>
   );
+}
+
+function EditStaffForm({ user, roles, onClose, onSave }: { user: User; roles: Role[]; onClose: () => void; onSave: (user: User) => void }) {
+  const [name, setName] = useState(user.name);
+  const [email, setEmail] = useState(user.email);
+  const [roleId, setRoleId] = useState(user.roleId);
+  const [isActive, setIsActive] = useState(user.isActive);
+  return <form onSubmit={(event) => { event.preventDefault(); onSave({ ...user, name: name.trim(), email: email.trim(), roleId, isActive }); }}>
+    <div className="dialog-body">
+      <label className="field"><span className="field-label">Full name</span><input className="input" required value={name} onChange={(event) => setName(event.target.value)} /></label>
+      <label className="field"><span className="field-label">Login ID / Department email</span><input className="input" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+      <label className="field"><span className="field-label">Role</span><select className="select" value={roleId} onChange={(event) => setRoleId(event.target.value)}>{roles.filter((role) => role.id !== 'ROLE-SUPER-ADMIN').map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
+      <label className="toolbar"><input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} /> <span className="field-label">Account active</span></label>
+    </div>
+    <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary">Save changes</button></div>
+  </form>;
 }
 
 function AddStaffForm({
