@@ -205,6 +205,142 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 }
 @media (max-width: 420px) { .otp input { width: 42px; height: 50px; font-size: 19px; } }
 
+/* ---------- Auth (sign in / create account) ---------- */
+
+/*
+ * Two panels: the portal's case for itself on the left, the form on the right.
+ *
+ * The mockup let the left panel grow to whatever its content needed and
+ * floated the form card against it, which left the two visually unrelated at
+ * desktop widths. Here both columns are stretched to a shared height and the
+ * form is centred within its own column, so the pair reads as one object. On
+ * a phone the left panel is dropped entirely rather than stacked - a citizen
+ * who has opened the sign-in page is already persuaded, and making them
+ * scroll past a sales pitch to reach the field is the wrong trade.
+ */
+.auth {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: var(--sp-6);
+  align-items: stretch;
+  padding: var(--sp-5) 0 var(--sp-6);
+}
+@media (max-width: 1020px) {
+  .auth { grid-template-columns: 1fr; gap: var(--sp-5); }
+  .auth .pitch { display: none; }
+}
+
+.pitch {
+  background: linear-gradient(165deg, #0b2545 0%, #061629 55%, #07261c 100%);
+  color: #fff;
+  border-radius: var(--r-lg);
+  padding: var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.pitch .eyebrow {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 6px 12px; border-radius: var(--r-full);
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.pitch h1 { font-size: 34px; font-weight: 800; line-height: 1.18; }
+.pitch .hi { font-size: 18px; font-weight: 600; color: #b1c7f0; }
+.pitch .lede { color: #c7d6ea; font-size: 15px; line-height: 1.72; margin: 0; }
+
+.pitch .feat {
+  display: flex; gap: var(--sp-3);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--r); padding: var(--sp-3) var(--sp-4);
+}
+.pitch .feat .ico {
+  width: 34px; height: 34px; flex: none; border-radius: var(--r-sm);
+  background: rgba(177, 199, 240, 0.16);
+  display: grid; place-items: center; font-size: 16px;
+}
+.pitch .feat b { display: block; font-size: 14.5px; margin-bottom: 1px; }
+.pitch .feat span { font-size: 13px; color: #b9c9de; line-height: 1.6; }
+
+.pitch .figures {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--r); padding: var(--sp-4) 0; text-align: center;
+  margin-top: auto;
+}
+.pitch .figures div + div { border-left: 1px solid rgba(255, 255, 255, 0.12); }
+.pitch .figures b { display: block; font-size: 21px; font-weight: 800; letter-spacing: -0.02em; }
+.pitch .figures span { font-size: 11px; color: #a9bdd6; font-weight: 600; letter-spacing: 0.04em; }
+
+.pitch .trust {
+  display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-5);
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; color: #9fb4cd;
+}
+.pitch .trust span { display: inline-flex; align-items: center; gap: 6px; }
+
+.authcard {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  padding: var(--sp-6);
+  align-self: center;
+  width: 100%;
+}
+@media (max-width: 560px) { .authcard { padding: var(--sp-5) var(--sp-4); } }
+
+.authcard .eyebrow {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.1em;
+  color: var(--secondary); text-transform: uppercase;
+}
+
+/* Segmented Login / Create Account switch. */
+.segs {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-1);
+  background: var(--surface-2); border-radius: var(--r); padding: 5px;
+}
+.segs button {
+  display: flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  min-height: 42px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--ink-2);
+  font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.segs button[aria-selected='true'] { background: var(--primary); color: #fff; }
+.segs button:focus-visible { outline: 2px solid var(--secondary); outline-offset: 2px; }
+
+.authcard .swap {
+  border-top: 1px solid var(--line);
+  margin-top: var(--sp-5); padding-top: var(--sp-4);
+  text-align: center; font-size: 13.5px; color: var(--ink-3);
+}
+.authcard .swap button {
+  background: none; border: 0; padding: 0 0 0 4px; cursor: pointer;
+  font-family: inherit; font-size: 13.5px; font-weight: 700; color: var(--secondary);
+}
+
+.consent {
+  display: flex; gap: var(--sp-3); align-items: flex-start;
+  font-size: 12.5px; color: var(--ink-2); line-height: 1.6;
+}
+.consent input { width: 20px; height: 20px; flex: none; margin-top: 1px; accent-color: var(--primary); }
+
+/* Live mobile-verification state, shown rather than claimed. */
+.vstate {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.03em;
+}
+.vstate::before {
+  content: ''; width: 8px; height: 8px; border-radius: var(--r-full); background: var(--line-2);
+}
+.vstate.pending { color: var(--warn); }
+.vstate.pending::before { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+.vstate.done { color: var(--success); }
+.vstate.done::before { background: var(--success); }
+
 /* ---------- Badges ---------- */
 
 .badge {

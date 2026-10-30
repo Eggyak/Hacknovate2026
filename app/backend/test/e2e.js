@@ -277,6 +277,82 @@ async function runAudioCapture() {
   await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
 }
 
+/**
+ * Sign-up and sign-in validation.
+ *
+ * Every case here is one the server must REFUSE before it reaches delivery,
+ * so running this sends no SMS. The one accepted case is checked at the
+ * database, to prove the sign-up details are parked on the OTP row and not
+ * written to `citizens` until the number is proved.
+ */
+async function runAuthFlow() {
+  console.log('\n--- sign up and sign in ---');
+  const post = async (body) => {
+    const res = await fetch(`${BASE}/api/auth/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, data: await res.json().catch(() => ({})) };
+  };
+
+  const mobile = '9000000011';
+  await query('DELETE FROM citizens WHERE mobile = $1', [mobile]);
+  await query('DELETE FROM otp_codes WHERE mobile = $1', [mobile]);
+
+  const base = { mode: 'signup', mobile, gender: 'Male', email: 'citizen@example.com', consent: true };
+
+  const noName = await post({ ...base, fullName: '' });
+  check('sign-up refuses a missing name', noName.status === 422, `HTTP ${noName.status}`);
+
+  const badGender = await post({ ...base, fullName: 'Test Citizen', gender: 'Wizard' });
+  check('sign-up refuses a gender outside the list', badGender.status === 422, `HTTP ${badGender.status}`);
+
+  const noConsent = await post({ ...base, fullName: 'Test Citizen', consent: false });
+  check('sign-up refuses without the confirmation', noConsent.status === 422, `HTTP ${noConsent.status}`);
+
+  const badEmail = await post({ ...base, fullName: 'Test Citizen', email: 'not-an-email' });
+  check('sign-up refuses a malformed email', badEmail.status === 422, `HTTP ${badEmail.status}`);
+
+  const unknown = await post({ mode: 'signin', mobile: '9000000012', email: 'citizen@example.com' });
+  check('sign-in refuses an unknown number', unknown.status === 404, `HTTP ${unknown.status}`);
+
+  const noEmail = await post({ mode: 'signin', mobile, email: '' });
+  check('sign-in requires an email', noEmail.status === 422 || noEmail.status === 404,
+    `HTTP ${noEmail.status}`);
+
+  // The one accepted request. Twilio rejects unverified numbers on a trial
+  // account, so nothing is delivered; what matters is what was stored.
+  const ok = await post({ ...base, fullName: 'Test Citizen' });
+  check('a complete sign-up is accepted', ok.status === 200, `HTTP ${ok.status}`);
+  check('the number is masked in the response', /•/.test(ok.data.mobile || ''), ok.data.mobile);
+
+  const parked = (await query(
+    'SELECT profile FROM otp_codes WHERE mobile = $1 ORDER BY created_at DESC LIMIT 1', [mobile],
+  )).rows[0];
+  check('sign-up details parked on the OTP row',
+    parked?.profile?.fullName === 'Test Citizen' && parked?.profile?.gender === 'Male',
+    JSON.stringify(parked?.profile));
+
+  const created = await query('SELECT id FROM citizens WHERE mobile = $1', [mobile]);
+  check('no account exists until the number is verified', created.rows.length === 0,
+    `${created.rows.length} row(s)`);
+
+  // With an account on file, a mismatched email must be refused.
+  await query(
+    `INSERT INTO citizens (mobile, mobile_verified, full_name, gender, email)
+     VALUES ($1, TRUE, 'Test Citizen', 'Male', 'citizen@example.com')`, [mobile],
+  );
+  const dup = await post({ ...base, fullName: 'Test Citizen' });
+  check('sign-up refuses a number that already has an account', dup.status === 409, `HTTP ${dup.status}`);
+
+  const wrongEmail = await post({ mode: 'signin', mobile, email: 'someone.else@example.com' });
+  check('sign-in refuses a mismatched email', wrongEmail.status === 422, `HTTP ${wrongEmail.status}`);
+
+  await query('DELETE FROM citizens WHERE mobile = $1', [mobile]);
+  await query('DELETE FROM otp_codes WHERE mobile = $1', [mobile]);
+}
+
 async function main() {
   console.log(`Testing ${BASE}`);
   try {
@@ -285,6 +361,7 @@ async function main() {
     await runValidation();
     await runSpeech();
     await runAudioCapture();
+    await runAuthFlow();
   } catch (err) {
     console.error('\nUNCAUGHT', err);
     failed += 1;

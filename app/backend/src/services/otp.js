@@ -108,7 +108,7 @@ async function deliver({ mobile, code, purpose }) {
  * codes one number may be issued in an hour. Both are enforced in the
  * database, so they survive a restart and apply across processes.
  */
-export async function requestCode(mobileInput, { purpose = 'login' } = {}) {
+export async function requestCode(mobileInput, { purpose = 'login', profile = {} } = {}) {
   const mobile = normaliseMobile(mobileInput);
 
   const recent = await query(
@@ -152,10 +152,10 @@ export async function requestCode(mobileInput, { purpose = 'login' } = {}) {
   const delivery = await deliver({ mobile, code, purpose });
 
   const inserted = await query(
-    `INSERT INTO otp_codes (mobile, code_hash, purpose, expires_at, delivery)
-     VALUES ($1, $2, $3, NOW() + ($4 || ' seconds')::interval, $5)
+    `INSERT INTO otp_codes (mobile, code_hash, purpose, expires_at, delivery, profile)
+     VALUES ($1, $2, $3, NOW() + ($4 || ' seconds')::interval, $5, $6)
      RETURNING id, expires_at`,
-    [mobile, codeHash, purpose, String(env.otp.ttlSeconds), JSON.stringify(delivery)],
+    [mobile, codeHash, purpose, String(env.otp.ttlSeconds), JSON.stringify(delivery), JSON.stringify(profile || {})],
   );
 
   return {
@@ -183,7 +183,7 @@ export async function verifyCode(mobileInput, submitted, { purpose = 'login' } =
   }
 
   const found = await query(
-    `SELECT id, code_hash, attempts, expires_at
+    `SELECT id, code_hash, attempts, expires_at, profile
        FROM otp_codes
       WHERE mobile = $1 AND purpose = $2 AND consumed_at IS NULL
       ORDER BY created_at DESC
@@ -225,7 +225,10 @@ export async function verifyCode(mobileInput, submitted, { purpose = 'login' } =
   }
 
   await query('UPDATE otp_codes SET consumed_at = NOW() WHERE id = $1', [row.id]);
-  return { mobile, verified: true };
+
+  // The details the citizen gave before we could reach their phone. They
+  // become an account only now, on proof they hold the number.
+  return { mobile, verified: true, profile: row.profile || {} };
 }
 
 /** Housekeeping: drop codes that can no longer be used. */

@@ -45,21 +45,91 @@ function handleOtpError(err, res) {
   throw err;
 }
 
-/** Step 1: the citizen types their mobile number. */
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const GENDERS = ['Male', 'Female', 'Third Gender / Transgender', 'Prefer not to say'];
+
+/**
+ * Step 1, for both doors.
+ *
+ * `signup` collects the identity fields the data schema needs - name, gender,
+ * email - and parks them on the OTP row. They become an account only in
+ * /verify, on proof the citizen holds the number. Creating the record here
+ * would let anyone squat on someone else's mobile number by starting a
+ * sign-up they never finish.
+ *
+ * `signin` asks for the number and the email together. Where an account
+ * already carries an email, the one typed must match it: the OTP proves
+ * possession of the handset, and this is a second thing the holder of a
+ * borrowed or recycled SIM would not know.
+ */
 authRouter.post('/start', startLimiter, async (req, res, next) => {
   try {
+    const mode = req.body?.mode === 'signup' ? 'signup' : 'signin';
     const mobile = normaliseMobile(req.body?.mobile);
+    const email = String(req.body?.email || '').trim();
 
-    const existing = await query('SELECT id, full_name FROM citizens WHERE mobile = $1', [mobile]);
-    const result = await requestCode(mobile, { purpose: 'login' });
+    const found = await query(
+      'SELECT id, full_name, email FROM citizens WHERE mobile = $1',
+      [mobile],
+    );
+    const existing = found.rows[0] || null;
+    const errors = [];
+    let profile = {};
+
+    if (mode === 'signup') {
+      const fullName = String(req.body?.fullName || '').trim();
+      const gender = String(req.body?.gender || '').trim();
+
+      if (existing) {
+        return res.status(409).json({
+          error: 'already_registered',
+          message: 'This mobile number already has an account. Sign in instead.',
+        });
+      }
+      if (fullName.length < 2) errors.push({ field: 'fullName', message: 'Enter your full name.' });
+      if (!GENDERS.includes(gender)) errors.push({ field: 'gender', message: 'Select your gender.' });
+      // Email is optional at sign-up, per the data schema, but must be valid
+      // if it is given at all.
+      if (email && !EMAIL_RE.test(email)) {
+        errors.push({ field: 'email', message: 'Enter a valid email address, or leave it blank.' });
+      }
+      if (req.body?.consent !== true) {
+        errors.push({ field: 'consent', message: 'Confirm your particulars to continue.' });
+      }
+
+      if (errors.length > 0) return res.status(422).json({ error: 'validation_failed', errors });
+      profile = { fullName, gender, email: email.toLowerCase() };
+    } else {
+      if (!existing) {
+        return res.status(404).json({
+          error: 'no_account',
+          message: 'No account for this mobile number. Create one first.',
+        });
+      }
+      if (!email || !EMAIL_RE.test(email)) {
+        errors.push({ field: 'email', message: 'Enter the email address on your account.' });
+      } else if (existing.email && existing.email.toLowerCase() !== email.toLowerCase()) {
+        // Deliberately the same wording as a bad email, so this cannot be
+        // used to discover which address an account holds.
+        errors.push({ field: 'email', message: 'That email does not match this mobile number.' });
+      }
+
+      if (errors.length > 0) return res.status(422).json({ error: 'validation_failed', errors });
+      // An older account with no address on file adopts the one just given.
+      profile = existing.email ? {} : { email: email.toLowerCase() };
+    }
+
+    const result = await requestCode(mobile, { purpose: 'login', profile });
 
     return res.json({
       ok: true,
-      mobile: `******${mobile.slice(-4)}`,
-      isReturning: existing.rows.length > 0,
-      name: existing.rows[0]?.full_name || null,
+      mode,
+      mobile: `+91 ${mobile.slice(0, 2)}••• ••${mobile.slice(-2)}`,
+      isReturning: Boolean(existing),
+      name: existing?.full_name || profile.fullName || null,
       expiresAt: result.expiresAt,
       ttlSeconds: result.ttlSeconds,
+      resendAfter: 60,
       delivered: result.delivery.delivered,
       // Present only when delivery failed, so the UI can say what went wrong
       // instead of showing a code-entry box for a message that never arrived.
@@ -75,26 +145,33 @@ authRouter.post('/start', startLimiter, async (req, res, next) => {
   }
 });
 
+/** The genders offered at sign-up, so the form and the server cannot drift. */
+authRouter.get('/genders', (_req, res) => res.json({ genders: GENDERS }));
+
 /** Step 2: the citizen types the code. A session is issued on success. */
 authRouter.post('/verify', verifyLimiter, async (req, res, next) => {
   try {
     const { mobile, code } = req.body || {};
     const normalised = normaliseMobile(mobile);
-    await verifyCode(normalised, code, { purpose: 'login' });
+    const { profile } = await verifyCode(normalised, code, { purpose: 'login' });
 
     const language = byCode(req.body?.language)?.code || 'en';
 
-    // First sight of this number creates the citizen. Repeat sign-ins update
-    // nothing except the verification flag and the chosen language.
+    // The number is proven, so the details given at sign-up become an account.
+    // COALESCE on update rather than overwrite: signing in again must not
+    // blank a name the citizen has since corrected on their profile.
     const upserted = await query(
-      `INSERT INTO citizens (mobile, mobile_verified, preferred_language)
-       VALUES ($1, TRUE, $2)
+      `INSERT INTO citizens (mobile, mobile_verified, preferred_language, full_name, gender, email)
+       VALUES ($1, TRUE, $2, NULLIF($3,''), NULLIF($4,''), NULLIF($5,''))
        ON CONFLICT (mobile) DO UPDATE
          SET mobile_verified = TRUE,
              preferred_language = EXCLUDED.preferred_language,
+             full_name = COALESCE(citizens.full_name, EXCLUDED.full_name),
+             gender = COALESCE(citizens.gender, EXCLUDED.gender),
+             email = COALESCE(citizens.email, EXCLUDED.email),
              updated_at = NOW()
        RETURNING id, mobile, mobile_verified, full_name, gender, email, preferred_language, created_at`,
-      [normalised, language],
+      [normalised, language, profile?.fullName || '', profile?.gender || '', profile?.email || ''],
     );
 
     const citizen = upserted.rows[0];
@@ -136,7 +213,7 @@ authRouter.patch('/profile', requireCitizen, async (req, res, next) => {
     }
 
     const genderValue = String(gender || '').trim();
-    if (genderValue && !['Male', 'Female', 'Other', 'Prefer not to say'].includes(genderValue)) {
+    if (genderValue && !GENDERS.includes(genderValue)) {
       errors.push({ field: 'gender', message: 'Choose one of the listed options.' });
     }
 

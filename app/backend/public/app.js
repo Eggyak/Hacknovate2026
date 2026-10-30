@@ -309,176 +309,380 @@ function setView(html) {
   window.scrollTo(0, 0);
 }
 
-/** Sign in / sign up. One flow: the number proves itself, then we know which. */
-function viewSignIn() {
+/**
+ * Sign in and create account.
+ *
+ * Two doors, one verification. Creating an account collects the identity
+ * fields the grievance schema needs - name, gender, email - and signing in
+ * asks for the number and the email together. Either way the number is proved
+ * by a code before anything is written, and the verification state is shown
+ * as it actually is rather than asserted.
+ */
+
+const auth = { mode: 'signin', pending: null, timer: null, genders: [] };
+
+function viewAuth(mode = 'signin') {
+  auth.mode = mode === 'signup' ? 'signup' : 'signin';
+  auth.pending = null;
+  clearInterval(auth.timer);
+
+  const h = state.health;
   setView(`
-    <div style="max-width:440px;margin:40px auto">
-      <div class="card pad-lg">
-        <h1 style="font-size:24px">Sign in</h1>
-        <p class="muted small mt-2 mb-4">
-          Enter your mobile number. We will send a one-time code — there is no password.
-        </p>
+    <div class="auth">
+      <aside class="pitch">
+        <span class="eyebrow">MHA Samadhan / एमएचए समाधान</span>
+        <h1>Your Voice Matters.<br>Your Grievance Matters.</h1>
+        <div class="hi">आपकी आवाज़, आपका अधिकार।</div>
+        <p class="lede">Register your grievance, follow its progress, and receive the official
+          outcome through one portal.</p>
 
-        <form id="startForm" novalidate>
-          <div class="field">
-            <label for="mobile">Mobile number</label>
-            <div class="phone-row">
-              <span class="cc">+91</span>
-              <input id="mobile" type="tel" inputmode="numeric" autocomplete="tel-national"
-                     maxlength="10" placeholder="10-digit number" required>
-            </div>
-            <div class="err hidden" id="mobileErr"></div>
-          </div>
-          <button class="btn primary block" type="submit" id="sendBtn">Send code</button>
-        </form>
+        <div class="feat">
+          <span class="ico" aria-hidden="true">&#127908;</span>
+          <span><b>Speak or type</b>
+            <span>Describe what happened in your own words, by voice or text, in
+            ${h.counts.languages} Indian languages.</span></span>
+        </div>
+        <div class="feat">
+          <span class="ico" aria-hidden="true">&#127758;</span>
+          <span><b>Routed automatically</b>
+            <span>Your complaint is read in your own language and sent to the right
+            one of ${h.counts.divisions} divisions.</span></span>
+        </div>
+        <div class="feat">
+          <span class="ico" aria-hidden="true">&#9201;</span>
+          <span><b>${h.sla.days}-day deadline</b>
+            <span>Every step is logged and the clock is visible to you from the moment
+            you file.</span></span>
+        </div>
 
-        <form id="codeForm" class="hidden" novalidate>
-          <p class="small mb-3">Code sent to <b id="maskedNum"></b>.
-            <button type="button" class="btn quiet" id="changeNum" style="min-height:auto;padding:0 4px">Change</button>
-          </p>
-          <div class="field">
-            <label class="sr" for="d0">One-time code</label>
-            <div class="otp" id="otpBoxes"></div>
-            <div class="err hidden center mt-3" id="codeErr"></div>
-          </div>
-          <button class="btn primary block" type="submit" id="verifyBtn">Verify and continue</button>
-          <div class="center mt-3">
-            <button type="button" class="btn quiet" id="resendBtn" disabled>Resend code</button>
-          </div>
-        </form>
-      </div>
-      <p class="center small muted mt-4">Your number is used only to verify you and to send updates.</p>
+        <div class="figures">
+          <div><b>${h.counts.languages}</b><span>LANGUAGES</span></div>
+          <div><b>${h.counts.divisions}</b><span>DIVISIONS</span></div>
+          <div><b>${h.sla.days}</b><span>DAY SLA</span></div>
+        </div>
+
+        <div class="trust">
+          <span>&#128274; TLS ENCRYPTED</span>
+          <span>&#9878; DPDP ACT 2023</span>
+          <span>&#8226;&#8226;&#8226; NO PASSWORDS</span>
+        </div>
+      </aside>
+
+      <div><div class="authcard" id="authcard"></div></div>
     </div>`);
 
-  let mobile = '';
-  const startForm = $('#startForm');
-  const codeForm = $('#codeForm');
+  renderAuthCard();
+}
 
-  startForm.onsubmit = async (e) => {
-    e.preventDefault();
-    const input = $('#mobile');
-    const err = $('#mobileErr');
-    const value = input.value.replace(/\D/g, '');
+function renderAuthCard() {
+  const host = $('#authcard');
+  if (auth.pending) return renderOtpStep(host);
 
-    if (!/^[6-9]\d{9}$/.test(value)) {
-      err.textContent = 'Enter a valid 10-digit Indian mobile number.';
-      err.classList.remove('hidden');
-      input.setAttribute('aria-invalid', 'true');
-      return;
+  const signup = auth.mode === 'signup';
+  host.innerHTML = `
+    <div class="eyebrow">MHA Samadhan &middot; Citizen Gateway</div>
+    <h1 style="font-size:24px;margin:6px 0 4px">Welcome to MHA Samadhan</h1>
+    <p class="muted small mb-4" style="margin-bottom:20px">
+      ${signup ? 'Create an account to register and track grievances.'
+               : 'Sign in to register and track grievances.'}
+    </p>
+
+    <div class="segs mb-4" role="tablist">
+      <button role="tab" aria-selected="${!signup}" data-mode="signin">Login / प्रवेश</button>
+      <button role="tab" aria-selected="${signup}" data-mode="signup">Create Account / नया खाता</button>
+    </div>
+
+    <form id="authForm" novalidate>
+      ${signup ? `
+        <div class="field">
+          <label for="fullName">Full name <span style="color:var(--danger)">*</span></label>
+          <input id="fullName" type="text" autocomplete="name" required>
+          <div class="hint">As printed on your official identity document.</div>
+          <div class="err hidden" data-err="fullName"></div>
+        </div>` : ''}
+
+      <div class="field">
+        <div class="row between">
+          <label for="mobile" style="margin:0">Mobile number <span style="color:var(--danger)">*</span></label>
+          <span class="small muted">10 digits</span>
+        </div>
+        <div class="phone-row" style="margin-top:6px">
+          <span class="cc">+91</span>
+          <input id="mobile" type="tel" inputmode="numeric" autocomplete="tel-national"
+                 maxlength="10" placeholder="Enter mobile number" required>
+        </div>
+        <div class="err hidden" data-err="mobile"></div>
+      </div>
+
+      ${signup ? `
+        <div class="field">
+          <label for="gender">Gender <span style="color:var(--danger)">*</span></label>
+          <select id="gender" required>
+            <option value="">Select gender</option>
+            ${auth.genders.map((g) => `<option value="${esc(g)}">${esc(g)}</option>`).join('')}
+          </select>
+          <div class="err hidden" data-err="gender"></div>
+        </div>` : ''}
+
+      <div class="field">
+        <label for="email">
+          Email address ${signup ? '<span class="muted" style="font-weight:400">(optional)</span>'
+                                 : '<span style="color:var(--danger)">*</span>'}
+        </label>
+        <input id="email" type="email" autocomplete="email" placeholder="name@example.com"
+               ${signup ? '' : 'required'}>
+        <div class="hint">${signup ? 'Used for grievance updates if you add one.'
+                                   : 'The address on your account.'}</div>
+        <div class="err hidden" data-err="email"></div>
+      </div>
+
+      ${signup ? `
+        <div class="field">
+          <label>Mobile verification</label>
+          <span class="vstate pending">Pending — we will send a code to this number</span>
+        </div>
+        <div class="field">
+          <label class="consent">
+            <input type="checkbox" id="consent">
+            <span>I confirm the particulars given are correct, and agree to receive grievance
+              communications about them.</span>
+          </label>
+          <div class="err hidden" data-err="consent"></div>
+        </div>` : ''}
+
+      <div class="err hidden mb-3" data-err="_form"></div>
+      <button class="btn primary block" type="submit" id="authBtn">
+        ${signup ? 'Verify mobile and create account' : 'Continue with mobile OTP'}
+      </button>
+    </form>
+
+    <div class="swap">
+      ${signup ? 'Already registered?<button type="button" data-swap="signin">Sign in here &rarr;</button>'
+               : 'First time here?<button type="button" data-swap="signup">Create an account &rarr;</button>'}
+    </div>`;
+
+  $$('[data-mode]', host).forEach((b) => {
+    b.onclick = () => { auth.mode = b.dataset.mode; renderAuthCard(); };
+  });
+  $$('[data-swap]', host).forEach((b) => {
+    b.onclick = () => { auth.mode = b.dataset.swap; renderAuthCard(); };
+  });
+
+  $('#mobile').oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, ''); };
+  $('#authForm').onsubmit = submitAuth;
+  return undefined;
+}
+
+function showErr(field, message) {
+  const el = $(`[data-err="${field}"]`);
+  if (!el) return;
+  el.textContent = message;
+  el.classList.remove('hidden');
+}
+
+function clearErrs() {
+  $$('[data-err]').forEach((el) => el.classList.add('hidden'));
+}
+
+async function submitAuth(e) {
+  e.preventDefault();
+  clearErrs();
+
+  const signup = auth.mode === 'signup';
+  const mobile = $('#mobile').value.replace(/\D/g, '');
+  const email = ($('#email').value || '').trim();
+
+  let bad = false;
+  if (!/^[6-9]\d{9}$/.test(mobile)) {
+    showErr('mobile', 'Enter a valid 10-digit number starting 6, 7, 8 or 9.');
+    bad = true;
+  }
+  if (signup) {
+    if (($('#fullName').value || '').trim().length < 2) {
+      showErr('fullName', 'Enter your full name.');
+      bad = true;
     }
-    err.classList.add('hidden');
-    input.removeAttribute('aria-invalid');
-
-    const btn = $('#sendBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spin"></span> Sending';
-
-    try {
-      const r = await api.post('/auth/start', { mobile: value });
-      mobile = value;
-      $('#maskedNum').textContent = r.mobile;
-      startForm.classList.add('hidden');
-      codeForm.classList.remove('hidden');
-      buildOtpBoxes();
-      startResendTimer(r.ttlSeconds);
-
-      if (!r.delivered) {
-        toast(
-          r.devCode
-            ? `SMS delivery is not connected yet. Your code is ${r.devCode}.`
-            : 'The code could not be sent by SMS. Check the delivery service.',
-          r.devCode ? 'warn' : 'bad',
-        );
-        if (r.devCode) fillOtp(r.devCode);
-      }
-    } catch (ex) {
-      err.textContent = ex.message;
-      err.classList.remove('hidden');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Send code';
+    if (!$('#gender').value) { showErr('gender', 'Select your gender.'); bad = true; }
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      showErr('email', 'Enter a valid email address, or leave it blank.');
+      bad = true;
     }
-  };
-
-  function buildOtpBoxes() {
-    const host = $('#otpBoxes');
-    host.innerHTML = Array.from({ length: 6 }, (_, i) =>
-      `<input id="d${i}" type="text" inputmode="numeric" maxlength="1" autocomplete="${i === 0 ? 'one-time-code' : 'off'}" aria-label="Digit ${i + 1}">`).join('');
-
-    const boxes = $$('#otpBoxes input');
-    boxes.forEach((box, i) => {
-      box.oninput = () => {
-        box.value = box.value.replace(/\D/g, '');
-        if (box.value && i < 5) boxes[i + 1].focus();
-        if (boxes.every((b) => b.value)) codeForm.requestSubmit();
-      };
-      box.onkeydown = (ev) => {
-        if (ev.key === 'Backspace' && !box.value && i > 0) boxes[i - 1].focus();
-      };
-      box.onpaste = (ev) => {
-        ev.preventDefault();
-        fillOtp((ev.clipboardData.getData('text') || '').replace(/\D/g, ''));
-      };
-    });
-    boxes[0].focus();
+    if (!$('#consent').checked) { showErr('consent', 'Confirm your particulars to continue.'); bad = true; }
+  } else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    showErr('email', 'Enter the email address on your account.');
+    bad = true;
   }
+  if (bad) return;
 
-  function fillOtp(digits) {
-    const boxes = $$('#otpBoxes input');
-    [...digits.slice(0, 6)].forEach((d, i) => { boxes[i].value = d; });
-    if (digits.length >= 6) codeForm.requestSubmit();
-  }
+  const btn = $('#authBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Sending code';
 
-  let timer = null;
-  function startResendTimer(seconds) {
-    const btn = $('#resendBtn');
-    let left = Math.min(seconds || 60, 60);
-    clearInterval(timer);
-    const tick = () => {
-      btn.disabled = left > 0;
-      btn.textContent = left > 0 ? `Resend code in ${left}s` : 'Resend code';
-      left -= 1;
-      if (left < -1) clearInterval(timer);
-    };
-    tick();
-    timer = setInterval(tick, 1000);
-    btn.onclick = () => startForm.requestSubmit();
+  try {
+    const body = { mode: auth.mode, mobile, email };
+    if (signup) {
+      body.fullName = $('#fullName').value.trim();
+      body.gender = $('#gender').value;
+      body.consent = $('#consent').checked;
+    }
+
+    const r = await api.post('/auth/start', body);
+    // Keep the accepted body: a resend has to re-state everything the server
+    // validated the first time, and the citizen should not retype it.
+    auth.pending = { mobile, masked: r.mobile, mode: auth.mode, name: r.name, body };
+    renderAuthCard();
+
+    if (!r.delivered) {
+      toast(
+        r.devCode
+          ? `SMS is not connected yet. Your code is ${r.devCode}.`
+          : 'The code could not be sent by SMS. Check the delivery service.',
+        r.devCode ? 'warn' : 'bad',
+      );
+      if (r.devCode) fillOtp(r.devCode);
+    }
+  } catch (ex) {
+    if (ex.errors) ex.errors.forEach((x) => showErr(x.field, x.message));
+    else showErr('_form', ex.message);
+    btn.disabled = false;
+    btn.textContent = signup ? 'Verify mobile and create account' : 'Continue with mobile OTP';
   }
+}
+
+function renderOtpStep(host) {
+  const { masked, mode } = auth.pending;
+
+  host.innerHTML = `
+    <div class="eyebrow">Secure session</div>
+    <h1 style="font-size:24px;margin:6px 0 4px">Enter the 6-digit code</h1>
+    <p class="muted small" style="margin-bottom:20px">
+      Sent by SMS to <b class="tnum">${esc(masked)}</b>.
+      <button type="button" class="btn quiet" id="changeNum"
+              style="min-height:auto;padding:0 4px">Change</button>
+    </p>
+
+    <div class="field">
+      <span class="vstate pending" id="vstate">Awaiting verification</span>
+    </div>
+
+    <form id="otpForm" novalidate>
+      <div class="field">
+        <label class="sr" for="d0">One-time code</label>
+        <div class="otp" id="otpBoxes"></div>
+        <div class="err hidden center mt-3" data-err="code"></div>
+      </div>
+      <button class="btn primary block" type="submit" id="verifyBtn">
+        ${mode === 'signup' ? 'Verify and create account' : 'Verify and sign in'}
+      </button>
+    </form>
+
+    <div class="center mt-3">
+      <button type="button" class="btn quiet" id="resendBtn" disabled>Resend code</button>
+    </div>`;
+
+  const boxes = buildOtpBoxes();
+  startResend(60);
 
   $('#changeNum').onclick = () => {
-    clearInterval(timer);
-    codeForm.classList.add('hidden');
-    startForm.classList.remove('hidden');
-    $('#mobile').focus();
+    clearInterval(auth.timer);
+    auth.pending = null;
+    renderAuthCard();
   };
 
-  codeForm.onsubmit = async (e) => {
-    e.preventDefault();
-    const code = $$('#otpBoxes input').map((b) => b.value).join('');
-    const err = $('#codeErr');
-    if (code.length !== 6) return;
+  $('#otpForm').onsubmit = verifyOtp;
+  boxes[0].focus();
+  return undefined;
+}
 
-    const btn = $('#verifyBtn');
+function buildOtpBoxes() {
+  const host = $('#otpBoxes');
+  host.innerHTML = Array.from({ length: 6 }, (_, i) =>
+    `<input id="d${i}" type="text" inputmode="numeric" maxlength="1" aria-label="Digit ${i + 1}"
+            autocomplete="${i === 0 ? 'one-time-code' : 'off'}">`).join('');
+
+  const boxes = $$('#otpBoxes input');
+  boxes.forEach((box, i) => {
+    box.oninput = () => {
+      box.value = box.value.replace(/\D/g, '');
+      if (box.value && i < 5) boxes[i + 1].focus();
+      if (boxes.every((b) => b.value)) $('#otpForm').requestSubmit();
+    };
+    box.onkeydown = (ev) => {
+      if (ev.key === 'Backspace' && !box.value && i > 0) boxes[i - 1].focus();
+    };
+    box.onpaste = (ev) => {
+      ev.preventDefault();
+      fillOtp((ev.clipboardData.getData('text') || '').replace(/\D/g, ''));
+    };
+  });
+  return boxes;
+}
+
+function fillOtp(digits) {
+  const boxes = $$('#otpBoxes input');
+  if (!boxes.length) return;
+  [...digits.slice(0, 6)].forEach((d, i) => { boxes[i].value = d; });
+  if (digits.length >= 6) $('#otpForm').requestSubmit();
+}
+
+function startResend(seconds) {
+  const btn = $('#resendBtn');
+  let left = seconds;
+  clearInterval(auth.timer);
+
+  const tick = () => {
+    if (!document.getElementById('resendBtn')) return clearInterval(auth.timer);
+    btn.disabled = left > 0;
+    btn.textContent = left > 0
+      ? `Resend code in ${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`
+      : 'Resend code';
+    left -= 1;
+    return undefined;
+  };
+  tick();
+  auth.timer = setInterval(tick, 1000);
+
+  btn.onclick = async () => {
     btn.disabled = true;
-    btn.innerHTML = '<span class="spin"></span> Verifying';
-    err.classList.add('hidden');
-
     try {
-      const r = await api.post('/auth/verify', { mobile, code });
-      state.citizen = r.citizen;
-      clearInterval(timer);
-      renderChrome();
-      location.hash = r.profileComplete ? '#/' : '#/profile';
+      const r = await api.post('/auth/start', auth.pending.body);
+      startResend(60);
+      if (r.devCode) { toast(`Your code is ${r.devCode}.`, 'warn'); fillOtp(r.devCode); }
     } catch (ex) {
-      err.textContent = ex.message;
-      err.classList.remove('hidden');
-      $$('#otpBoxes input').forEach((b) => { b.value = ''; });
-      $('#d0').focus();
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Verify and continue';
+      toast(ex.message, 'bad');
+      startResend(15);
     }
   };
+}
+
+async function verifyOtp(e) {
+  e.preventDefault();
+  const code = $$('#otpBoxes input').map((b) => b.value).join('');
+  if (code.length !== 6) return;
+
+  clearErrs();
+  const btn = $('#verifyBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Verifying';
+
+  try {
+    const r = await api.post('/auth/verify', { mobile: auth.pending.mobile, code });
+    state.citizen = r.citizen;
+
+    const v = $('#vstate');
+    if (v) { v.className = 'vstate done'; v.textContent = 'Mobile verified'; }
+
+    clearInterval(auth.timer);
+    auth.pending = null;
+    renderChrome();
+    location.hash = r.profileComplete ? '#/' : '#/profile';
+  } catch (ex) {
+    showErr('code', ex.message);
+    $$('#otpBoxes input').forEach((b) => { b.value = ''; });
+    $('#d0')?.focus();
+    btn.disabled = false;
+    btn.textContent = auth.pending?.mode === 'signup' ? 'Verify and create account' : 'Verify and sign in';
+  }
 }
 
 /** Dashboard. Counters are computed from this citizen's own records. */
@@ -491,6 +695,7 @@ async function viewDashboard() {
   ]);
 
   const recent = list.grievances;
+  const c = state.citizen;
 
   setView(`
     <div class="row between wrap mb-4">
@@ -506,6 +711,43 @@ async function viewDashboard() {
       <div class="stat"><div class="n tnum">${stats.active}</div><div class="k">Active</div></div>
       <div class="stat"><div class="n tnum">${stats.resolved}</div><div class="k">Resolved</div></div>
       <div class="stat"><div class="n tnum" style="color:${stats.breached ? 'var(--danger)' : 'inherit'}">${stats.breached}</div><div class="k">Past due</div></div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="row between wrap mb-3">
+        <h2>Your details</h2>
+        <a class="small" href="#/profile">Edit</a>
+      </div>
+      <div class="grid c3">
+        <div>
+          <div class="small muted">Name</div>
+          <div><b>${esc(c.full_name || 'Not provided')}</b></div>
+        </div>
+        <div>
+          <div class="small muted">Mobile number</div>
+          <div><b class="tnum">+91 ${esc(c.mobile)}</b></div>
+          <span class="vstate ${c.mobile_verified ? 'done' : 'pending'}">
+            ${c.mobile_verified ? 'OTP verified' : 'Not verified'}</span>
+        </div>
+        <div>
+          <div class="small muted">Gender</div>
+          <div><b>${esc(c.gender || 'Not provided')}</b></div>
+        </div>
+        <div>
+          <div class="small muted">Email</div>
+          <div><b>${esc(c.email || 'Not provided')}</b></div>
+        </div>
+        <div>
+          <div class="small muted">Preferred language</div>
+          <div><b>${esc(langOf(c.preferred_language)?.native || '-')}</b></div>
+        </div>
+        <div>
+          <div class="small muted">Profile</div>
+          <div>${c.full_name && c.gender
+            ? '<span class="badge ok">Complete</span>'
+            : '<a class="badge pending" href="#/profile" style="text-decoration:none">Needs details</a>'}</div>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -1148,11 +1390,38 @@ function viewTrack() {
 
 function viewProfile() {
   const c = state.citizen;
+  const complete = Boolean(c.full_name && c.gender);
+
   setView(`
-    <div style="max-width:560px;margin:24px auto">
-      <h1 class="mb-3">${c.full_name ? 'Your profile' : 'Complete your profile'}</h1>
-      ${c.full_name ? '' : '<p class="muted small mb-4">Your name and gender are required on every grievance, so we ask once.</p>'}
+    <div style="max-width:720px;margin:8px auto">
+      <h1 class="mb-3">${complete ? 'Your profile' : 'Complete your profile'}</h1>
+      ${complete ? '' : `
+        <div class="notice warn mb-4">
+          <span>Your name and gender are required on every grievance. Fill them in once here.</span>
+        </div>`}
+
+      <div class="card mb-4">
+        <h3 class="mb-3">Account details</h3>
+        <table class="data"><tbody>
+          <tr><td class="small muted" style="width:42%">Name</td>
+              <td class="small"><b>${esc(c.full_name || 'Not provided')}</b></td></tr>
+          <tr><td class="small muted">Mobile number</td>
+              <td class="small"><b class="tnum">+91 ${esc(c.mobile)}</b></td></tr>
+          <tr><td class="small muted">OTP verification status</td>
+              <td><span class="vstate ${c.mobile_verified ? 'done' : 'pending'}">
+                ${c.mobile_verified ? 'Verified' : 'Not verified'}</span></td></tr>
+          <tr><td class="small muted">Gender</td>
+              <td class="small"><b>${esc(c.gender || 'Not provided')}</b></td></tr>
+          <tr><td class="small muted">Email</td>
+              <td class="small"><b>${esc(c.email || 'Not provided')}</b></td></tr>
+          <tr><td class="small muted">Preferred language</td>
+              <td class="small"><b>${esc(langOf(c.preferred_language)?.native || '-')}</b>
+                <span class="muted">${esc(langOf(c.preferred_language)?.name || '')}</span></td></tr>
+        </tbody></table>
+      </div>
+
       <div class="card">
+        <h3 class="mb-3">Edit details</h3>
         <form id="pf">
           <div class="field">
             <label for="fn">Full name</label>
@@ -1161,9 +1430,9 @@ function viewProfile() {
           <div class="field">
             <label for="gd">Gender</label>
             <select id="gd">
-              <option value="">Select</option>
-              ${['Male', 'Female', 'Other', 'Prefer not to say'].map((o) =>
-                `<option ${c.gender === o ? 'selected' : ''}>${o}</option>`).join('')}
+              <option value="">Select gender</option>
+              ${auth.genders.map((o) =>
+                `<option ${c.gender === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
             </select>
           </div>
           <div class="field">
@@ -1174,15 +1443,16 @@ function viewProfile() {
             <label for="pl">Preferred language</label>
             <select id="pl">
               ${state.languages.map((l) =>
-                `<option value="${l.code}" ${c.preferred_language === l.code ? 'selected' : ''}>${esc(l.native)} · ${esc(l.name)}</option>`).join('')}
+                `<option value="${l.code}" ${c.preferred_language === l.code ? 'selected' : ''}>${esc(l.native)} &middot; ${esc(l.name)}</option>`).join('')}
             </select>
+            <div class="hint">The bot speaks and replies in this language by default.</div>
           </div>
           <div class="field">
-            <label>Mobile</label>
+            <label>Mobile number</label>
             <input type="text" value="+91 ${esc(c.mobile)}" disabled>
-            <div class="hint">Verified. Contact support to change it.</div>
+            <div class="hint">Verified by OTP and cannot be changed here.</div>
           </div>
-          <button class="btn primary block" type="submit" id="pfBtn">Save</button>
+          <button class="btn primary block" type="submit" id="pfBtn">Save changes</button>
         </form>
       </div>
     </div>`);
@@ -1201,7 +1471,7 @@ function viewProfile() {
       state.citizen = r.citizen;
       renderChrome();
       toast('Profile saved.', 'good');
-      location.hash = '#/';
+      viewProfile();
     } catch (ex) {
       toast(ex.errors ? ex.errors.map((x) => x.message).join(' ') : ex.message, 'bad');
     } finally {
@@ -1216,13 +1486,13 @@ async function route() {
   const hash = location.hash || '#/';
 
   if (!state.citizen && hash !== '#/track') {
-    if (hash !== '#/signin') { location.hash = '#/signin'; return; }
+    if (hash !== '#/signin' && hash !== '#/signup') { location.hash = '#/signin'; return; }
     renderChrome();
-    viewSignIn();
+    viewAuth(hash === '#/signup' ? 'signup' : 'signin');
     return;
   }
 
-  if (state.citizen && hash === '#/signin') { location.hash = '#/'; return; }
+  if (state.citizen && (hash === '#/signin' || hash === '#/signup')) { location.hash = '#/'; return; }
 
   renderChrome();
 
@@ -1242,14 +1512,16 @@ async function route() {
 
 async function boot() {
   try {
-    const [health, langs, divs] = await Promise.all([
+    const [health, langs, divs, genders] = await Promise.all([
       api.get('/health'),
       api.get('/speech/languages'),
       api.get('/grievances/divisions'),
+      api.get('/auth/genders'),
     ]);
     state.health = health;
     state.languages = langs.languages;
     state.divisions = divs.divisions;
+    auth.genders = genders.genders;
     renderCapabilities();
   } catch {
     setView('<div class="notice bad">The service is not reachable. Please try again shortly.</div>');
