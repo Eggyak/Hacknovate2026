@@ -84,21 +84,28 @@ async function main() {
   console.log('\n--- the interview continues ---\n');
   say('bot', chosen.data.bot.text);
 
-  const answers = [
-    'Vidya Path Coaching Institute, Mukerian',
-    'Fees were collected between 2 and 10 August 2026',
-    'Around forty students, eighty thousand rupees in total',
-    'We have signed fee receipts and the rental agreement of the building',
-    'We want the fees returned and the institute investigated',
-    'We complained to the local police station but no FIR was registered',
-  ];
-
-  for (let i = 0; i < questions.length; i += 1) {
-    const answer = answers[i] || 'Not known';
-    say('citizen', answer);
-    const r = await api(`/chat/${id}/message`, { method: 'POST', body: { text: answer, inputMode: 'text' } });
-    say('bot', r.data.bot.text);
-  }
+  /*
+   * The questions are written by the model and differ run to run, so a fixed
+   * list of answers in a fixed order produces a transcript where nothing
+   * lines up. Answer each question on what it actually asks for.
+   */
+  const answerFor = (label) => {
+    const q = label.toLowerCase();
+    if (/name of the (private )?(coaching )?institute|institute.*name/.test(q)) {
+      return 'Vidya Path Coaching Institute';
+    }
+    if (/town|city|where|location|located|address of the/.test(q)) return 'Mukerian, Hoshiarpur district, Punjab';
+    if (/owner|proprietor|who ran|director/.test(q)) return 'Rakesh Mehta, the proprietor';
+    if (/when|date|period|how long/.test(q)) return 'Fees were collected between 2 and 10 August 2026';
+    if (/how much|amount|fees paid|total|rupees|money/.test(q)) return 'Eighty thousand rupees across forty students';
+    if (/how many|number of students|affected/.test(q)) return 'Forty students';
+    if (/steps|reported|police|complaint|action taken|so far/.test(q)) {
+      return 'We went to the local police station but no FIR was registered';
+    }
+    if (/evidence|receipt|proof|document/.test(q)) return 'Signed fee receipts and the building rental agreement';
+    if (/outcome|want|expect|seeking|relief/.test(q)) return 'Refund of the fees and an investigation into the institute';
+    return 'We do not have that information';
+  };
 
   for (const [label, text] of [['pincode', '144211'], ['district', 'Hoshiarpur'],
     ['address', 'Main Bazaar, Mukerian, Punjab']]) {

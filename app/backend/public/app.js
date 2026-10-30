@@ -2041,7 +2041,20 @@ async function viewDetail(reference) {
     return;
   }
 
-  const details = Object.entries(g.dynamic_details || {});
+  /*
+   * Object key order is insertion order, which for an unlisted complaint is
+   * whatever order the answers happened to be written - not the order the
+   * citizen was asked. The stored questions carry the real sequence.
+   */
+  const labelOrder = Object.keys(g.dynamic_labels || {});
+  const details = Object.entries(g.dynamic_details || {}).sort((a, b) => {
+    const ia = labelOrder.indexOf(a[0]);
+    const ib = labelOrder.indexOf(b[0]);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
   /*
    * A listed division names its own fields. An unlisted complaint was asked
    * questions written for it, which were stored alongside the answers - and
