@@ -2,7 +2,7 @@ import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
@@ -89,6 +89,52 @@ app.get('/api/bootstrap',requireAuth,(req,res)=>{
 app.get('/api/tickets',requireAuth,requirePermission('tickets:read'),(req,res)=>{const scope=ticketScope(req);res.json(db.prepare(`SELECT * FROM tickets${scope.sql} ORDER BY submission_timestamp DESC LIMIT 500`).all(...scope.params).map(row=>ticketForRole(row,req)));});
 const intakeLimiter=rateLimit({windowMs:60*60*1000,limit:20,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Intake limit reached. Please try again later.'}});
 const categoryDivisions=Object.fromEntries(divisions.map(([divisionId,,category])=>[category,divisionId]));
+/*
+ * Service-to-service endpoints for the citizen portal.
+ *
+ * The integration guide records that citizen tracking is not implemented and
+ * invites a contract for it. These are that contract, and they are
+ * deliberately the smallest thing that works:
+ *
+ *   /api/intake/wards        the ward list, so the citizen side can resolve a
+ *                            PIN code to a ward id this API will accept
+ *                            rather than guessing one
+ *   /api/intake/status/:id   status and report for ONE case, by grievance id
+ *
+ * Both require a shared service key, not a staff session. The citizen portal
+ * is a server, not a person; giving it a staff token would hand a public-
+ * facing service the scope of whichever officer it borrowed. Neither endpoint
+ * exposes any other case, and status returns no complainant identity - it is
+ * for telling a citizen about their own complaint, which they already filed.
+ *
+ * When no key is configured both stay closed, so a misconfigured deployment
+ * fails shut rather than open.
+ */
+function requireServiceKey(req,res,next){
+  const expected=process.env.MHA_INTAKE_SERVICE_KEY??'';
+  if(!expected)return res.status(503).json({error:'Service integration is not configured.'});
+  const given=String(req.get('x-service-key')??'');
+  const a=createHash('sha256').update(given).digest();
+  const b=createHash('sha256').update(expected).digest();
+  if(!timingSafeEqual(a,b))return res.status(401).json({error:'Not authorised.'});
+  return next();
+}
+
+app.get('/api/intake/wards',intakeLimiter,requireServiceKey,(_req,res)=>{
+  res.json({wards:wardsList.all().map(w=>({id:w.id,name:w.name,district:w.district,state:w.state,pincodePrefix:w.pincode_prefix,zone:w.zone}))});
+});
+
+app.get('/api/intake/status/:grievanceId',intakeLimiter,requireServiceKey,(req,res)=>{
+  const row=db.prepare('SELECT grievance_id,division_id,category,status,sla_status,submission_timestamp,sla_deadline,action_taken_report,updated_at FROM tickets WHERE grievance_id=?').get(String(req.params.grievanceId));
+  if(!row)return res.status(404).json({error:'No case with that grievance id.'});
+  res.json({
+    grievanceId:row.grievance_id,divisionId:row.division_id,category:row.category,
+    status:row.status,slaStatus:row.sla_status,
+    submittedAt:row.submission_timestamp,slaDeadline:row.sla_deadline,
+    actionTakenReport:row.action_taken_report??null,updatedAt:row.updated_at,
+  });
+});
+
 app.post('/api/intake/grievances',intakeLimiter,(req,res)=>{
   const body=req.body??{};const name=String(body.complainantName??'').trim();const mobile=String(body.mobileNumber??'').trim();const wardId=String(body.wardId??'');const category=String(body.category??'');const divisionId=String(body.divisionId??'');
   const validDivision=divisions.some(([id])=>id===divisionId);

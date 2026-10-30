@@ -1,0 +1,459 @@
+/**
+ * Handing a filed complaint to the department workspace.
+ *
+ * The two systems were built separately and name everything differently: our
+ * division is `cyber`, theirs is CYBER_INFORMATION_SECURITY + CYBERCRIME; our
+ * field is `transaction_id`, theirs is `transactionId`; our location is a PIN
+ * code, theirs is a ward id that must already exist in their table. This
+ * module is the whole of that translation, in one place, so neither side has
+ * to know about the other's vocabulary.
+ *
+ * Two rules shape it:
+ *
+ *   A complaint is accepted before it is forwarded. The citizen's docket is
+ *   issued by us, from our database, the moment they declare it true. If the
+ *   department workspace is down, slow, or rejects the payload, that is our
+ *   problem to retry - not a reason to tell someone their grievance failed.
+ *
+ *   Nothing is invented to satisfy their validator. Where we genuinely do not
+ *   have a value their API wants, the complaint is held unsynced and the
+ *   reason recorded, rather than padded with a plausible-looking default that
+ *   would put a Punjab complaint on a Delhi desk.
+ */
+
+import { env } from '../lib/env.js';
+import { query } from '../lib/db.js';
+import { stateForPincode } from '../data/states.js';
+
+/** Our division id -> their { divisionId, category }, from the integration guide. */
+export const DIVISION_MAP = {
+  cyber: { divisionId: 'CYBER_INFORMATION_SECURITY', category: 'CYBERCRIME' },
+  foreigners: { divisionId: 'FOREIGNERS', category: 'IMMIGRATION' },
+  disaster: { divisionId: 'DISASTER_MANAGEMENT', category: 'DISASTER_RELIEF' },
+  freedom_fighters: { divisionId: 'FREEDOM_FIGHTERS_REHABILITATION', category: 'FREEDOM_FIGHTERS_REHABILITATION' },
+  capf: { divisionId: 'CENTRAL_ARMED_POLICE_FORCES', category: 'CAPF_MISCONDUCT' },
+  fcra: { divisionId: 'NGO_FCRA', category: 'FCRA_NGO' },
+  ut: { divisionId: 'UT_ADMINISTRATION', category: 'UT_ADMIN' },
+  internal_security: { divisionId: 'INTERNAL_SECURITY', category: 'INTERNAL_SECURITY' },
+  counter_terror: { divisionId: 'COUNTER_TERRORISM', category: 'COUNTER_TERRORISM' },
+  lwe_ne: { divisionId: 'LWE_NORTH_EAST', category: 'LWE_NORTH_EAST' },
+  border: { divisionId: 'BORDER_MANAGEMENT', category: 'BORDER_MANAGEMENT' },
+  judicial: { divisionId: 'JUDICIAL', category: 'JUDICIAL' },
+  police: { divisionId: 'POLICE', category: 'POLICE' },
+  centre_state: { divisionId: 'CENTRE_STATE', category: 'CENTRE_STATE' },
+  internal_admin: { divisionId: 'INTERNAL_ADMINISTRATION', category: 'INTERNAL_DIVISIONS' },
+  // Their triage desk. The guide is explicit that intake discards details for
+  // OTHER, so the questions we asked travel in the narrative instead.
+  other: { divisionId: 'OTHER_TRIAGE', category: 'OTHER' },
+};
+
+/**
+ * Our field keys -> their detail keys.
+ *
+ * The guide warns against sending both an alias and its normalised name, so
+ * each of ours maps to exactly one of theirs. `amountLost` is typed as a
+ * number on their side; everything else is a string.
+ */
+const FIELD_MAP = {
+  cyber: {
+    transaction_id: 'transactionId',
+    amount_lost: { key: 'amountLost', numeric: true },
+    fraud_at: 'fraudDateTime',
+    platform_used: 'platformUsed',
+    suspect_details: 'suspectDetails',
+  },
+  foreigners: {
+    passport_number: 'passportNumber',
+    file_reference: 'applicationReferenceNumber',
+    nationality: 'nationality',
+    visa_type: 'visaType',
+    issue_expiry: 'issueDate',
+  },
+  disaster: {
+    aadhaar_number: 'aadhaarNumber',
+    disaster_name: 'disasterName',
+    damage_category: 'damageCategory',
+    // bankAccountDetails is an object on their side; assembled below.
+  },
+  freedom_fighters: {
+    ppo_number: 'ppoNumber',
+    bank_branch: 'bankBranch',
+    bank_ifsc: 'ifsc',
+    fighter_name: 'freedomFighterName',
+    sanction_date: 'sanctionDate',
+  },
+  capf: {
+    force_name: 'forceName',
+    officer_details: 'officerName',
+    incident_at: 'incidentDate',
+    misconduct_type: 'misconductType',
+  },
+  fcra: {
+    ngo_name: 'ngoName',
+    fcra_number: 'fcraRegistrationNumber',
+    registration_state: 'registrationState',
+    violation_nature: 'violationNature',
+  },
+  ut: {
+    specific_ut: 'specificUt',
+    civic_department: 'civicDepartment',
+    ward_zone: 'wardOrZoneNumber',
+    property_id: 'propertyId',
+  },
+  internal_security: {
+    complaint_nature: 'complaintNature',
+    target_location: 'targetLocation',
+    suspect_org: 'suspectOrOrganization',
+  },
+  counter_terror: {
+    radicalization_platform: 'radicalizationPlatform',
+    threat_type: 'threatType',
+    threat_target: 'threatLocationOrSubject',
+  },
+  lwe_ne: {
+    region_village: 'regionOrVillage',
+    complaint_nature: 'complaintNature',
+    police_station: 'policeStationJurisdiction',
+  },
+  border: {
+    border_name: 'borderNameOrState',
+    village_post: 'villageOrPost',
+    issue_category: 'issueCategory',
+  },
+  judicial: {
+    prisoner_details: 'prisonerName',
+    prison_name: 'prisonName',
+    case_number: 'courtCaseOrFirNumber',
+    petition_nature: 'petitionNature',
+  },
+  police: {
+    officer_name: 'officerOrNomineeName',
+    state_cadre: 'stateCadre',
+    request_nature: 'requestNature',
+  },
+  centre_state: {
+    states_involved: { key: 'statesInvolved', list: true },
+    dispute_nature: 'disputeNature',
+  },
+  internal_admin: {
+    query_type: 'queryType',
+    reference_number: 'referenceNumberOrDate',
+  },
+};
+
+/** Their gender allow-list. */
+function mapGender(gender) {
+  const g = String(gender || '').toLowerCase();
+  if (g.startsWith('male')) return 'MALE';
+  if (g.startsWith('female')) return 'FEMALE';
+  if (g.includes('third') || g.includes('transgender')) return 'NON_BINARY';
+  return 'NOT_SPECIFIED';
+}
+
+/** Translate our dynamic details into their per-category shape. */
+export function mapDetails(divisionId, details = {}) {
+  if (divisionId === 'other') return {};
+  const map = FIELD_MAP[divisionId];
+  if (!map) return {};
+
+  const out = {};
+  for (const [ours, spec] of Object.entries(map)) {
+    const raw = details[ours];
+    if (raw === undefined || raw === null || String(raw).trim() === '') continue;
+
+    if (typeof spec === 'string') {
+      out[spec] = String(raw);
+      continue;
+    }
+    if (spec.numeric) {
+      const n = Number(String(raw).replace(/[^0-9.]/g, ''));
+      if (Number.isFinite(n)) out[spec.key] = n;
+      continue;
+    }
+    if (spec.list) {
+      out[spec.key] = String(raw).split(/\s*,\s*/).filter(Boolean);
+    }
+  }
+
+  // Their disaster category nests the bank details, ours are two flat fields.
+  if (divisionId === 'disaster') {
+    const accountNumber = details.bank_account;
+    const ifsc = details.bank_ifsc;
+    if (accountNumber || ifsc) {
+      out.bankAccountDetails = {
+        accountNumber: String(accountNumber || ''),
+        ifsc: String(ifsc || ''),
+      };
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Choose the ward their API will accept.
+ *
+ * A city ward wins whenever the PIN code reaches one, because it is the more
+ * precise answer; otherwise the state desk takes it. Returns null rather than
+ * guessing when neither matches - a complaint on the wrong desk is harder to
+ * find than one that was never forwarded.
+ */
+export function pickWard(wards, pincode, stateName) {
+  const pin = String(pincode || '').trim();
+
+  if (/^\d{6}$/.test(pin)) {
+    const byPrefix = wards
+      .filter((w) => w.pincodePrefix && pin.startsWith(String(w.pincodePrefix)))
+      .sort((a, b) => String(b.pincodePrefix).length - String(a.pincodePrefix).length);
+    if (byPrefix.length > 0) return byPrefix[0].id;
+  }
+
+  const state = stateName || (stateForPincode(pin) || {}).name;
+  if (state) {
+    const byState = wards.find((w) => String(w.state).toLowerCase() === String(state).toLowerCase());
+    if (byState) return byState.id;
+  }
+
+  return null;
+}
+
+let wardCache = null;
+let wardCachedAt = 0;
+const WARD_TTL_MS = 10 * 60 * 1000;
+
+/** Their ward list, cached - it changes about never. */
+export async function fetchWards() {
+  const now = Date.now();
+  if (wardCache && now - wardCachedAt < WARD_TTL_MS) return wardCache;
+
+  const res = await fetch(`${env.govt.baseUrl}/api/intake/wards`, {
+    headers: serviceHeaders(),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`ward list unavailable (HTTP ${res.status})`);
+
+  const data = await res.json();
+  wardCache = Array.isArray(data.wards) ? data.wards : [];
+  wardCachedAt = now;
+  return wardCache;
+}
+
+function serviceHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    ...(env.govt.serviceKey ? { 'X-Service-Key': env.govt.serviceKey } : {}),
+  };
+}
+
+export function configured() {
+  return Boolean(env.govt.baseUrl);
+}
+
+/**
+ * Build the intake payload for a grievance row of ours.
+ *
+ * Returns { ok, payload } or { ok: false, reason } when something their API
+ * requires is genuinely missing on our side.
+ */
+export async function buildPayload(grievance, citizen) {
+  const mapping = DIVISION_MAP[grievance.division_id];
+  if (!mapping) return { ok: false, reason: `no mapping for division ${grievance.division_id}` };
+
+  if (!grievance.translated_text) {
+    // Their API requires both texts. Ours is optional until a translator is
+    // configured, so say which it is rather than sending the original twice
+    // and labelling it a translation.
+    return { ok: false, reason: 'no English rendering available to send' };
+  }
+
+  let wards;
+  try {
+    wards = await fetchWards();
+  } catch (err) {
+    return { ok: false, reason: `ward list: ${err.message}` };
+  }
+
+  const wardId = pickWard(wards, grievance.pincode, grievance.state);
+  if (!wardId) return { ok: false, reason: `no ward matches PIN ${grievance.pincode || '(none)'}` };
+
+  const details = mapDetails(grievance.division_id, grievance.dynamic_details || {});
+
+  /*
+   * For their triage desk the details are discarded by design, so the
+   * questions we asked and the answers given are folded into the English
+   * narrative. Otherwise a triage officer sees a complaint with every
+   * follow-up answer stripped out.
+   */
+  let translated = grievance.translated_text;
+  if (grievance.division_id === 'other') {
+    const asked = Array.isArray(grievance.dynamic_labels) ? grievance.dynamic_labels : [];
+    const answers = grievance.dynamic_details || {};
+    const extra = asked
+      .map((q) => (answers[q.key] ? `${q.label}\n  ${answers[q.key]}` : null))
+      .filter(Boolean);
+    if (extra.length > 0) {
+      translated = `${translated}\n\n--- Follow-up questions asked by the assistant ---\n${extra.join('\n')}`;
+    }
+  }
+
+  return {
+    ok: true,
+    payload: {
+      complainantName: citizen.full_name || 'Citizen',
+      mobileNumber: `+91${citizen.mobile}`,
+      wardId,
+      divisionId: mapping.divisionId,
+      category: mapping.category,
+      detectedLanguage: grievance.detected_language || 'Hindi',
+      originalRegionalText: String(grievance.original_text).slice(0, 10_000),
+      translatedEnglishText: String(translated).slice(0, 10_000),
+      location: {
+        state: grievance.state || '',
+        district: grievance.district || '',
+        pincode: grievance.pincode || '',
+        completeAddress: grievance.address || '',
+        coordinates: {
+          latitude: Number(grievance.latitude) || 0,
+          longitude: Number(grievance.longitude) || 0,
+        },
+      },
+      details,
+      complainantProfile: {
+        otpVerified: Boolean(citizen.mobile_verified),
+        gender: mapGender(citizen.gender),
+        ...(citizen.email ? { email: citizen.email } : {}),
+      },
+      declarationOfTruth: Boolean(grievance.declaration_truth),
+      audioFileUrl: grievance.audio_path ? `${env.publicUrl}/api/grievances/audio/${grievance.audio_path}` : '',
+      evidence: [],
+      // Our docket, so a case can be matched across the two systems without
+      // relying on name and timestamp.
+      citizenReference: grievance.reference_id,
+    },
+  };
+}
+
+/**
+ * Forward one grievance. Records the outcome on our row either way.
+ *
+ * Never throws: a failure here must not reach the citizen, who has already
+ * been given a docket by us and told their complaint is filed.
+ */
+export async function forwardGrievance(grievanceId) {
+  if (!configured()) {
+    await recordFailure(grievanceId, 'department workspace not configured');
+    return { ok: false, reason: 'not_configured' };
+  }
+
+  const r = await query(
+    `SELECT g.*, c.full_name, c.mobile, c.mobile_verified, c.gender, c.email
+       FROM grievances g JOIN citizens c ON c.id = g.citizen_id
+      WHERE g.id = $1`,
+    [grievanceId],
+  );
+  if (r.rows.length === 0) return { ok: false, reason: 'not_found' };
+
+  const row = r.rows[0];
+  const citizen = {
+    full_name: row.full_name,
+    mobile: row.mobile,
+    mobile_verified: row.mobile_verified,
+    gender: row.gender,
+    email: row.email,
+  };
+
+  const built = await buildPayload(row, citizen);
+  if (!built.ok) {
+    await recordFailure(grievanceId, built.reason);
+    return { ok: false, reason: built.reason };
+  }
+
+  let res;
+  try {
+    res = await fetch(`${env.govt.baseUrl}/api/intake/grievances`, {
+      method: 'POST',
+      headers: serviceHeaders(),
+      body: JSON.stringify(built.payload),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (err) {
+    await recordFailure(grievanceId, `network: ${err.message}`);
+    return { ok: false, reason: err.message };
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    const reason = `HTTP ${res.status} ${body.slice(0, 200)}`;
+    await recordFailure(grievanceId, reason);
+    return { ok: false, reason };
+  }
+
+  const data = await res.json().catch(() => ({}));
+  const ticket = data.ticket || {};
+
+  await query(
+    `UPDATE grievances
+        SET govt_ticket_id = $2, govt_grievance_id = $3,
+            govt_synced_at = NOW(), govt_sync_error = NULL, updated_at = NOW()
+      WHERE id = $1`,
+    [grievanceId, ticket.id || null, ticket.grievanceId || null],
+  );
+
+  await query(
+    `INSERT INTO grievance_events (grievance_id, status, note, actor)
+     VALUES ($1, 'under_review', $2, 'system')`,
+    [grievanceId, `Forwarded to the department workspace as ${ticket.grievanceId || 'a new case'}.`],
+  );
+
+  return { ok: true, ticketId: ticket.id, grievanceId: ticket.grievanceId };
+}
+
+async function recordFailure(grievanceId, reason) {
+  await query(
+    'UPDATE grievances SET govt_sync_error = $2, updated_at = NOW() WHERE id = $1',
+    [grievanceId, String(reason).slice(0, 500)],
+  );
+  console.warn(`[govt] grievance ${grievanceId} not forwarded: ${reason}`);
+}
+
+/**
+ * Retry whatever has not reached the department yet.
+ *
+ * Runs on a timer. A complaint that could not be forwarded when it was filed
+ * - the workspace restarting, a translator that had not finished - must not
+ * sit unsent forever because nothing ever looks at it again.
+ */
+export async function retryPending(limit = 10) {
+  if (!configured()) return { attempted: 0 };
+
+  const r = await query(
+    `SELECT id FROM grievances
+      WHERE govt_synced_at IS NULL
+        AND submitted_at > NOW() - INTERVAL '7 days'
+      ORDER BY submitted_at
+      LIMIT $1`,
+    [limit],
+  );
+
+  let ok = 0;
+  for (const row of r.rows) {
+    const result = await forwardGrievance(row.id);
+    if (result.ok) ok += 1;
+  }
+  return { attempted: r.rows.length, forwarded: ok };
+}
+
+/** Ask the department what has happened to a case since. */
+export async function fetchStatus(govtGrievanceId) {
+  if (!configured() || !govtGrievanceId) return null;
+  try {
+    const res = await fetch(
+      `${env.govt.baseUrl}/api/intake/status/${encodeURIComponent(govtGrievanceId)}`,
+      { headers: serviceHeaders(), signal: AbortSignal.timeout(10_000) },
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}

@@ -144,6 +144,49 @@ const wardSeeds = [
   ['WARD-108','Salt Lake','North 24 Parganas','West Bengal','700091','Bidhannagar'],
 ];
 
+/*
+ * A state-level ward for every state and union territory.
+ *
+ * Intake refuses a wardId that is not in this table, and the eight seeded
+ * wards cover six cities - so a complaint from Punjab or Odisha had nowhere
+ * to land, and the only alternatives were to reject real citizens or quietly
+ * file them under a Delhi ward. Both are worse than carrying a state-level
+ * desk until the real ward list exists.
+ *
+ * These are additive and idempotent: the original eight are untouched and
+ * remain the preferred match, because a city ward is a better answer than a
+ * state one whenever the PIN code reaches it.
+ */
+const statewideWardSeeds = [
+  ['WARD-ST-DL','Delhi (statewide)','Delhi','Delhi','11','Statewide'],
+  ['WARD-ST-HR','Haryana (statewide)','Haryana','Haryana','12','Statewide'],
+  ['WARD-ST-PB','Punjab (statewide)','Punjab','Punjab','14','Statewide'],
+  ['WARD-ST-CH','Chandigarh (statewide)','Chandigarh','Chandigarh','16','Statewide'],
+  ['WARD-ST-HP','Himachal Pradesh (statewide)','Himachal Pradesh','Himachal Pradesh','17','Statewide'],
+  ['WARD-ST-JK','Jammu and Kashmir (statewide)','Jammu and Kashmir','Jammu and Kashmir','18','Statewide'],
+  ['WARD-ST-UP','Uttar Pradesh (statewide)','Uttar Pradesh','Uttar Pradesh','20','Statewide'],
+  ['WARD-ST-UK','Uttarakhand (statewide)','Uttarakhand','Uttarakhand','24','Statewide'],
+  ['WARD-ST-RJ','Rajasthan (statewide)','Rajasthan','Rajasthan','30','Statewide'],
+  ['WARD-ST-GJ','Gujarat (statewide)','Gujarat','Gujarat','36','Statewide'],
+  ['WARD-ST-MH','Maharashtra (statewide)','Maharashtra','Maharashtra','40','Statewide'],
+  ['WARD-ST-MP','Madhya Pradesh (statewide)','Madhya Pradesh','Madhya Pradesh','45','Statewide'],
+  ['WARD-ST-CG','Chhattisgarh (statewide)','Chhattisgarh','Chhattisgarh','49','Statewide'],
+  ['WARD-ST-TG','Telangana (statewide)','Telangana','Telangana','50','Statewide'],
+  ['WARD-ST-AP','Andhra Pradesh (statewide)','Andhra Pradesh','Andhra Pradesh','51','Statewide'],
+  ['WARD-ST-KA','Karnataka (statewide)','Karnataka','Karnataka','56','Statewide'],
+  ['WARD-ST-TN','Tamil Nadu (statewide)','Tamil Nadu','Tamil Nadu','60','Statewide'],
+  ['WARD-ST-PY','Puducherry (statewide)','Puducherry','Puducherry','605','Statewide'],
+  ['WARD-ST-KL','Kerala (statewide)','Kerala','Kerala','67','Statewide'],
+  ['WARD-ST-LD','Lakshadweep (statewide)','Lakshadweep','Lakshadweep','682','Statewide'],
+  ['WARD-ST-WB','West Bengal (statewide)','West Bengal','West Bengal','70','Statewide'],
+  ['WARD-ST-AN','Andaman and Nicobar Islands (statewide)','Andaman and Nicobar Islands','Andaman and Nicobar Islands','744','Statewide'],
+  ['WARD-ST-OR','Odisha (statewide)','Odisha','Odisha','75','Statewide'],
+  ['WARD-ST-AS','Assam (statewide)','Assam','Assam','78','Statewide'],
+  ['WARD-ST-NE','North Eastern States (statewide)','North Eastern States','North Eastern States','79','Statewide'],
+  ['WARD-ST-BR','Bihar (statewide)','Bihar','Bihar','80','Statewide'],
+  ['WARD-ST-JH','Jharkhand (statewide)','Jharkhand','Jharkhand','82','Statewide'],
+];
+
 export function seedDatabase() {
   const roleCount = db.prepare('SELECT COUNT(*) AS count FROM roles').get().count;
   if (roleCount === 0) {
@@ -174,6 +217,15 @@ export function seedDatabase() {
   }
   // Retire the former cross-department triage role. Keep any associated account
   // working with the least-privileged ward role until an administrator reassigns it.
+  // Statewide desks, so citizen intake from any state has a valid ward.
+  if (!db.prepare("SELECT 1 FROM app_migrations WHERE id='statewide-wards-for-intake'").get()) {
+    const insertStatewide = db.prepare('INSERT OR IGNORE INTO wards(id,name,district,state,pincode_prefix,zone) VALUES(?,?,?,?,?,?)');
+    db.transaction(() => {
+      for (const ward of statewideWardSeeds) insertStatewide.run(...ward);
+      db.prepare("INSERT INTO app_migrations(id) VALUES('statewide-wards-for-intake')").run();
+    })();
+  }
+
   if (!db.prepare("SELECT 1 FROM app_migrations WHERE id='retire-other-triage-role'").get()) {
     db.transaction(() => {
       const legacyRole = db.prepare("SELECT 1 FROM roles WHERE id='ROLE-OTHER-CASE-TRIAGE'").get();

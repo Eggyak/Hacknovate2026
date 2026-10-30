@@ -18,6 +18,7 @@ import { probe as speechProbe } from './services/azureSpeech.js';
 import { probe as translateProbe } from './services/translate.js';
 import { snapshot as mistralSnapshot } from './services/mistral.js';
 import { purgeExpired } from './services/otp.js';
+import { retryPending, configured as govtConfigured } from './services/govtIntake.js';
 import { LANGUAGES } from './data/languages.js';
 import { DIVISIONS } from './data/divisions.js';
 
@@ -125,9 +126,25 @@ async function start() {
   await migrate();
 
   const caps = capabilities();
-  console.log(`[boot] speech=${caps.speech} translation=${caps.translation} llm=${caps.llm} sms=${caps.smsOtp}`);
+  console.log(`[boot] speech=${caps.speech} translation=${caps.translation} llm=${caps.llm} sms=${caps.smsOtp} department=${caps.departmentSync}`);
   if (!caps.translation) {
     console.log('[boot] no translator configured: complaints will be routed and stored in the original language, with no English rendering.');
+  }
+
+  /*
+   * Sweep for complaints that never reached the department.
+   *
+   * Forwarding is attempted when a complaint is filed, but the workspace may
+   * be restarting, or a translation may not have finished. Without this a
+   * complaint that failed once would sit unsent forever, because nothing
+   * would ever look at it again - which is the worst failure this system has.
+   */
+  if (govtConfigured()) {
+    setInterval(() => {
+      retryPending().then((r) => {
+        if (r.attempted > 0) console.log(`[govt] retried ${r.attempted}, forwarded ${r.forwarded}`);
+      }).catch((e) => console.error('[govt] retry sweep failed', e.message));
+    }, env.govt.syncIntervalMs).unref();
   }
 
   // Expired codes are useless and are a liability; sweep them hourly.

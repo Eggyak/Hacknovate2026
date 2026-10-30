@@ -30,6 +30,7 @@ import { warmDivisionNames } from '../services/translate.js';
 import { t } from '../data/phrases.js';
 import { query } from '../lib/db.js';
 import * as mistral from '../services/mistral.js';
+import { forwardGrievance } from '../services/govtIntake.js';
 
 export const chatRouter = Router();
 
@@ -252,6 +253,18 @@ chatRouter.post('/:id/submit', async (req, res, next) => {
     });
 
     await linkGrievance(conversation.id, grievance.id);
+
+    /*
+     * Hand it to the department, without making the citizen wait for it.
+     *
+     * The docket above is already theirs: issued by us, from our database,
+     * the moment they declared the complaint true. Whether the department
+     * workspace accepts it in the next second or in five minutes when the
+     * retry sweep runs is our problem, not something to hold a reply on - and
+     * certainly not a reason to tell someone their grievance failed.
+     */
+    forwardGrievance(grievance.id).catch((err) =>
+      console.error('[govt] forward failed', err.message));
 
     const sla = slaFor(grievance);
     const deadline = new Date(grievance.sla_deadline).toLocaleDateString('en-IN', {

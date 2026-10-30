@@ -60,6 +60,14 @@ export const env = {
     timeoutMs: num('MISTRAL_TIMEOUT_MS', 20_000),
   },
 
+  // The department workspace. A separate service with its own database; we
+  // reach it over the container network, never through its public hostname.
+  govt: {
+    baseUrl: str('GOVT_API_URL'),
+    serviceKey: str('MHA_INTAKE_SERVICE_KEY'),
+    syncIntervalMs: num('GOVT_SYNC_INTERVAL_MS', 5 * 60 * 1000),
+  },
+
   otp: {
     // n8n owns delivery. We own generation, hashing, expiry and rate limiting.
     webhookUrl: str('N8N_OTP_WEBHOOK_URL'),
@@ -92,6 +100,7 @@ export function capabilities() {
     translation: Boolean(env.azureTranslator.key) || Boolean(env.mistral.apiKey),
     llm: Boolean(env.mistral.apiKey),
     smsOtp: Boolean(env.otp.webhookUrl),
+    departmentSync: Boolean(env.govt.baseUrl && env.govt.serviceKey),
   };
 }
 
