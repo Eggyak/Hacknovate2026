@@ -305,6 +305,17 @@ footer.site {
 .field .hint { font-size: 12.5px; color: var(--ink-3); margin-top: 5px; }
 .field .err { font-size: 12.5px; color: var(--danger); margin-top: 5px; font-weight: 600; }
 
+/*
+ * A form-level notice. Often it is not an error at all - "there is no account
+ * yet, so this is the sign-up form" is a redirect - so it is styled as
+ * guidance rather than as a refusal in red.
+ */
+[data-err="_form"]:not(.hidden) {
+  display: block;
+  background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af;
+  border-radius: var(--r); padding: 10px 13px; font-weight: 600; line-height: 1.5;
+}
+
 input[type='text'], input[type='tel'], input[type='email'], input[type='number'],
 input[type='date'], input[type='datetime-local'], select, textarea {
   width: 100%;

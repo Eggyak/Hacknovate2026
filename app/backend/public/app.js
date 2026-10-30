@@ -136,7 +136,7 @@ const i18n = {
   dict: {},                  // English -> translated, for the active language
   originals: new WeakMap(),  // node -> { '#text' | attr : the English source }
   tracked: [],               // every node we have touched, so it can be reset
-  pending: false,
+  queue: Promise.resolve(),  // fetches are queued, never dropped
 
   load(lang) {
     this.lang = lang;
@@ -262,6 +262,11 @@ const i18n = {
       } else {
         const current = node.nodeValue.trim();
         if (current !== hit) node.nodeValue = node.nodeValue.replace(current, hit);
+        // Let the browser resolve direction for this string alone. A
+        // right-to-left translation then reads correctly without the
+        // surrounding layout being mirrored.
+        const host = node.parentElement;
+        if (host && !host.hasAttribute('dir')) host.setAttribute('dir', 'auto');
       }
     }
   },
@@ -269,44 +274,68 @@ const i18n = {
   /**
    * Translate whatever is on screen now.
    *
-   * Paints from cache first so a language already seen appears instantly,
-   * then fetches only the strings it has never seen and paints again.
+   * Paints from cache first, so a language already seen appears instantly,
+   * then fetches whatever it has never seen and paints again.
+   *
+   * The ordering here is the whole bug fix. `localise()` runs twice per
+   * navigation - once after the masthead re-renders, once after the view -
+   * and the first version bailed out of the second call while the first was
+   * still in flight. The nodes collected by that second call were therefore
+   * never painted, so the page stayed English until something else forced a
+   * re-render. That is exactly the "pick Hindi, pick English, pick Hindi
+   * again" dance: the third selection finally landed because by then the
+   * dictionary was cached and no fetch was needed.
+   *
+   * Requests are now queued rather than dropped, and EVERY call paints its
+   * own nodes once the dictionary is up to date.
    */
   async apply(root = document.body) {
     if (this.lang === 'en') return;
 
+    const lang = this.lang;
     const { strings, nodes } = this.collect(root);
     if (strings.length === 0) return;
 
     this.paint(nodes);
 
     const missing = strings.filter((s) => !(s in this.dict));
-    if (missing.length === 0 || this.pending) return;
+    if (missing.length === 0) return;
 
-    this.pending = true;
+    // Queue behind any fetch already running instead of abandoning this one.
+    this.queue = this.queue.then(() => this.fetchMissing(missing, lang)).catch(() => {});
+    await this.queue;
+
+    // The citizen may have switched again while we waited; if so, the newer
+    // call owns the page and this one must not paint a stale language over it.
+    if (this.lang !== lang) return;
+    this.paint(nodes);
+  },
+
+  async fetchMissing(missing, lang) {
+    const wanted = missing.filter((s) => !(s in this.dict));
+    if (wanted.length === 0 || this.lang !== lang) return;
+
     try {
-      const r = await api.post('/i18n', { to: this.lang, texts: missing });
+      const r = await api.post('/i18n', { to: lang, texts: wanted });
+      if (this.lang !== lang) return;
       Object.assign(this.dict, r.translations || {});
-      // Remember the misses too, so an untranslatable string is not asked for
-      // on every single render.
-      for (const s of missing) if (!(s in this.dict)) this.dict[s] = '';
+      // Remember the misses too, so an untranslatable string is not asked
+      // for on every single render.
+      for (const s of wanted) if (!(s in this.dict)) this.dict[s] = '';
       this.save();
-      this.paint(nodes);
     } catch (err) {
       if (err.status === 503) {
         toast('Interface translation is not available on this server.', 'warn');
         this.lang = 'en';
       }
-    } finally {
-      this.pending = false;
     }
   },
 };
 
 /** Translate the current screen. Safe to call after any render. */
 function localise() {
-  if (i18n.lang === 'en') return;
-  i18n.apply().catch(() => { /* English is a working fallback */ });
+  if (i18n.lang === 'en') return Promise.resolve();
+  return i18n.apply().catch(() => { /* English is a working fallback */ });
 }
 
 /* ---------- speech ---------- */
@@ -515,9 +544,13 @@ function renderChrome() {
     const code = e.target.value;
     try { localStorage.setItem('mha_lang', code); } catch { /* private window */ }
 
-    const lang = state.languages.find((l) => l.code === code);
     document.documentElement.lang = code;
-    document.documentElement.setAttribute('dir', lang?.dir || 'ltr');
+    // Deliberately NOT setting dir on <html>. Urdu is right-to-left as TEXT,
+    // but mirroring the whole interface moves the form to the other side of
+    // the screen and reverses every row - a layout change nobody asked for
+    // when they asked for a translation. Browsers already lay Arabic script
+    // out correctly inside a left-to-right block, and individual strings get
+    // dir="auto" below so each one reads the right way round on its own.
 
     if (state.citizen) {
       api.patch('/auth/profile', { preferredLanguage: code }).catch(() => {});
@@ -530,7 +563,7 @@ function renderChrome() {
     i18n.restore();
     i18n.load(code);
     await route();
-    localise();
+    await localise();
   };
 
   localise();
@@ -862,28 +895,34 @@ async function submitAuth(e) {
     if (ex.errors) {
       ex.errors.forEach((x) => showErr(x.field, x.message));
     } else if (ex.code === 'no_account') {
-      // Telling someone to create an account and leaving them on the wrong
-      // form is how people give up. Carry their details across instead.
-      showErr('_form', 'No account for this number yet. Opening the sign-up form with your details.');
-      const carried = { mobile, email };
-      setTimeout(() => {
-        auth.mode = 'signup';
-        renderAuthCard();
-        $('#mobile').value = carried.mobile;
-        $('#email').value = carried.email;
-        const how = $('#vhow');
-        if (how) how.textContent = deliveryNote(carried.email);
-        $('#fullName').focus();
-      }, 1200);
+      /*
+       * Switch immediately, not after a timer.
+       *
+       * The delayed version left "No account for this number" sitting under
+       * a Login form for over a second, which reads as a refusal rather than
+       * a redirect - and a citizen who has an account on another portal, or
+       * who had one here before, will simply retype and try again. Carry
+       * their details over, say plainly what is still needed, and put the
+       * cursor in the first empty box.
+       */
+      auth.mode = 'signup';
+      renderAuthCard();
+      $('#mobile').value = mobile;
+      $('#email').value = email;
+      const how = $('#vhow');
+      if (how) how.textContent = deliveryNote(email);
+      showErr('_form', 'There is no account for this number yet, so this is the sign-up form. '
+        + 'Your number and email are filled in - add your name and gender to finish.');
+      $('#fullName').focus();
+      return;
     } else if (ex.code === 'already_registered') {
-      showErr('_form', 'This number already has an account. Switching you to sign in.');
-      const carried = { mobile, email };
-      setTimeout(() => {
-        auth.mode = 'signin';
-        renderAuthCard();
-        $('#mobile').value = carried.mobile;
-        $('#email').value = carried.email;
-      }, 1200);
+      auth.mode = 'signin';
+      renderAuthCard();
+      $('#mobile').value = mobile;
+      $('#email').value = email;
+      showErr('_form', 'This number already has an account, so this is the sign-in form. '
+        + 'Continue to receive your code.');
+      return;
     } else {
       showErr('_form', ex.message);
     }
@@ -2013,7 +2052,6 @@ async function boot() {
     const savedLang = langs.languages.find((l) => l.code === saved);
     if (savedLang) {
       document.documentElement.lang = savedLang.code;
-      document.documentElement.setAttribute('dir', savedLang.dir || 'ltr');
       i18n.load(savedLang.code);
     }
   } catch {
