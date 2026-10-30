@@ -53,6 +53,7 @@ function emptyDraft() {
     fullName: null,
     gender: null,
     attachments: [],
+    audioPath: null,
     declarationTruth: false,
     confirmedDivision: false,
   };
@@ -359,6 +360,23 @@ export async function attachEvidence(conversation, citizen, files) {
   const updated = { ...conversation, draft, step: nextStep(draft, citizen) };
   await save(updated);
   return { conversation: updated, reply: prompt(updated, citizen) };
+}
+
+/**
+ * Keep the recording the citizen's narrative came from.
+ *
+ * The data schema requires a raw audio file path on every complaint, and the
+ * reason is sound: the transcript is a machine's reading of what someone said,
+ * and when a complaint turns on exactly what was said, the recording is the
+ * evidence and the transcript is only a convenience. Recognition streams
+ * straight from the browser to Azure, so the audio would otherwise never
+ * reach us - the client captures it in parallel and posts it here.
+ */
+export async function attachAudio(conversation, citizen, storedName) {
+  const draft = { ...conversation.draft, audioPath: storedName };
+  const updated = { ...conversation, draft, step: nextStep(draft, citizen) };
+  await save(updated);
+  return { conversation: updated };
 }
 
 /** Record the declaration of truth. Only `true` counts. */

@@ -110,9 +110,64 @@ function toast(message, kind = 'info') {
 const speech = {
   recognizer: null,
   recording: false,
+  recorder: null,
+  chunks: [],
+  stream: null,
 
   available() {
     return Boolean(window.SpeechSDK) && Boolean(state.health?.capabilities?.speech);
+  },
+
+  /**
+   * Keep a copy of what the citizen actually said.
+   *
+   * The SDK streams the microphone to Azure and hands back text; the audio
+   * itself never reaches us. The data schema requires a raw audio path on
+   * every complaint, and rightly so - the transcript is a machine's reading
+   * of someone's words, and when a complaint turns on exactly what was said,
+   * the recording is the evidence. So we open a second capture of the same
+   * microphone and keep it.
+   *
+   * A failure here must never stop the citizen speaking, so it is swallowed:
+   * losing the recording is bad, losing the complaint is worse.
+   */
+  async startCapture() {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return;
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.chunks = [];
+      this.recorder = new MediaRecorder(this.stream);
+      this.recorder.ondataavailable = (e) => { if (e.data.size) this.chunks.push(e.data); };
+      this.recorder.start();
+    } catch {
+      this.recorder = null;
+    }
+  },
+
+  stopCapture() {
+    return new Promise((resolve) => {
+      const rec = this.recorder;
+      this.recorder = null;
+      if (!rec || rec.state === 'inactive') {
+        this.releaseMic();
+        return resolve(null);
+      }
+      rec.onstop = () => {
+        const blob = this.chunks.length ? new Blob(this.chunks, { type: rec.mimeType || 'audio/webm' }) : null;
+        this.chunks = [];
+        this.releaseMic();
+        resolve(blob);
+      };
+      try { rec.stop(); } catch { this.releaseMic(); resolve(null); }
+      return undefined;
+    });
+  },
+
+  releaseMic() {
+    if (this.stream) {
+      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+    }
   },
 
   /**
@@ -161,11 +216,13 @@ const speech = {
 
     this.recognizer = rec;
     this.recording = true;
+    await this.startCapture();
     await new Promise((resolve, reject) => rec.startContinuousRecognitionAsync(resolve, reject));
   },
 
   stop() {
     this.recording = false;
+    this.releaseMic();
     const rec = this.recognizer;
     this.recognizer = null;
     if (rec) {
@@ -839,6 +896,21 @@ async function finishUp() {
   }
 }
 
+/**
+ * Send the narrative recording up. Only the first one is kept: it is the
+ * citizen's account of what happened, not every later one-word answer.
+ */
+async function uploadNarrativeAudio(blob) {
+  if (!state.conversation || state.conversation.draft?.audioPath) return;
+  try {
+    const form = new FormData();
+    form.append('audio', blob, 'narrative.webm');
+    await api.upload(`/grievances/conversation/${state.conversation.conversationId}/audio`, form);
+  } catch {
+    // The complaint stands with or without the recording.
+  }
+}
+
 function wireMic() {
   const mic = $('#mic');
   if (!speech.available()) {
@@ -866,10 +938,12 @@ function wireMic() {
         onPartial: (text) => { say.value = text; },
         onFinal: async ({ text, locale, candidates }) => {
           speech.stop();
+          const blob = await speech.stopCapture();
           mic.classList.remove('rec');
           mic.classList.add('busy');
           say.value = '';
           await sendMessage(text, 'voice', { locale, candidates, confidence: 0.9 });
+          if (blob) await uploadNarrativeAudio(blob);
           mic.classList.remove('busy');
         },
         onError: (err) => {

@@ -199,6 +199,7 @@ chatRouter.post('/:id/submit', async (req, res, next) => {
       longitude: d.longitude,
       dynamicDetails: d.details,
       declarationTruth: d.declarationTruth,
+      audioPath: d.audioPath || null,
       attachments: d.attachments || [],
     });
 

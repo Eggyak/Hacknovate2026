@@ -17,7 +17,7 @@ import {
   statsForCitizen,
   slaFor,
 } from '../services/grievances.js';
-import { getConversation, attachEvidence } from '../services/conversation.js';
+import { getConversation, attachEvidence, attachAudio } from '../services/conversation.js';
 import { divisionById, DIVISIONS } from '../data/divisions.js';
 
 export const grievanceRouter = Router();
@@ -152,6 +152,39 @@ grievanceRouter.post('/conversation/:id/evidence', upload.array('files', env.upl
       attachments: updated.draft.attachments,
       count: updated.draft.attachments.length,
     });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/**
+ * Store the recording the narrative was spoken into.
+ *
+ * Separate from evidence: this is the citizen's own voice, captured by the
+ * browser while Azure transcribed it, and the schema treats it as part of the
+ * core payload rather than as an attachment.
+ */
+const audioUpload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (!/^audio\//.test(file.mimetype) && !/^video\/webm/.test(file.mimetype)) {
+      return cb(Object.assign(new Error('Expected an audio recording.'), {
+        status: 415, code: 'not_audio',
+      }));
+    }
+    return cb(null, true);
+  },
+});
+
+grievanceRouter.post('/conversation/:id/audio', audioUpload.single('audio'), async (req, res, next) => {
+  try {
+    const conversation = await getConversation(req.citizen.id, Number(req.params.id));
+    if (!conversation) return res.status(404).json({ error: 'not_found' });
+    if (!req.file) return res.status(400).json({ error: 'no_audio' });
+
+    await attachAudio(conversation, req.citizen, req.file.filename);
+    return res.json({ ok: true, stored: req.file.filename, bytes: req.file.size });
   } catch (err) {
     return next(err);
   }
