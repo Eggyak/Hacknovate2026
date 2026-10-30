@@ -4,6 +4,10 @@ import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcryptjs';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import {
+  createChallengeTable, accessKeyRequired, accessKeyValid,
+  issueChallenge, verifyChallenge, sweepChallenges, deliverCode,
+} from './staffAuth.js';
 import { join, resolve } from 'node:path';
 import {
   db, divisions, permissions, accessLevelPermissionGrants, seedDatabase, toRole, toUser, toTicket,
@@ -12,12 +16,18 @@ import {
 } from './db.js';
 
 seedDatabase();
+createChallengeTable(db);
+setInterval(()=>{try{sweepChallenges(db);}catch(e){console.error('[auth] challenge sweep',e.message);}},10*60*1000).unref();
 const app=express();
 const port=Number(process.env.API_PORT??3001);
 // Loopback is right for the local prototype and wrong inside a container,
 // where nothing outside the namespace could then reach it. Default is
 // unchanged so START_MHA_DASHBOARD.bat behaves exactly as before.
 const host=process.env.API_HOST??'127.0.0.1';
+// Declared here, not beside the intake limiters: `const` is not hoisted and
+// the sign-in routes above those would hit the temporal dead zone.
+const loginLimiter=rateLimit({windowMs:15*60*1000,limit:30,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many sign-in attempts. Try again shortly.'}});
+
 const cookieName='mha_session';
 const sessionLifetime=8*60*60*1000;
 app.disable('x-powered-by');
@@ -64,17 +74,88 @@ app.post('/api/auth/initial-admin',rateLimit({windowMs:60*60*1000,limit:5,standa
   const id=`USER-${randomUUID()}`;const initials=name.split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();const hashPassword=bcrypt.hashSync(password,12);
   try{db.transaction(()=>{if(usersList.all().length!==0)throw Object.assign(new Error('Initial administrator setup has already been completed.'),{code:'INITIAL_ADMIN_EXISTS'});db.prepare('INSERT INTO users(id,name,email,mobile_number,password_hash,role_id,assigned_wards_json,is_active,avatar_initials,must_change_password) VALUES(?,?,?,?,?,?,?,?,?,0)').run(id,name,email,mobile,hashPassword,role.id,'[]',1,initials);audit(id,'INITIAL_ADMIN_CREATED',`${name} completed first administrator setup.`);}).immediate();res.status(201).json({ok:true});}catch(error){if(error.code==='INITIAL_ADMIN_EXISTS')return res.status(409).json({error:error.message});if(error.code==='SQLITE_CONSTRAINT_UNIQUE')return res.status(409).json({error:'An account with that email already exists.'});throw error;}
 });
-app.post('/api/auth/login',(req,res)=>{
-  const email=String(req.body?.email??'').trim().toLowerCase();const password=String(req.body?.password??'');
+/*
+ * Staff sign-in, in two steps.
+ *
+ * Step one proves three things: a departmental access key issued out of band,
+ * then the account, then the password. The key is checked FIRST so a stolen
+ * password is never even tested against an account unless the person already
+ * holds something they were given separately.
+ *
+ * Step two proves possession of the address on the staff record. That is what
+ * turns a leaked password into a dead end - the code goes where the account
+ * says it goes, not where the person signing in asks.
+ *
+ * The response to step one says nothing about which factor failed. Telling a
+ * caller "wrong key" versus "wrong password" hands them a way to enumerate
+ * both separately.
+ */
+app.post('/api/auth/login',loginLimiter,async(req,res)=>{
+  const email=String(req.body?.email??'').trim().toLowerCase();
+  const password=String(req.body?.password??'');
+  const accessKey=String(req.body?.accessKey??'');
   if(email.length>254||password.length>200||!email||!password)return res.status(400).json({error:'Enter your department email and password.'});
-  const row=userByEmail.get(email);const dummy='$2b$10$3TtZ0N45oW2GLTtStTa/xOYKYmNdFK31yRqt6A3eAuR6wsHBmXOIG';
+  if(accessKeyRequired()&&!accessKey)return res.status(400).json({error:'The departmental access key is required.',accessKeyRequired:true});
+
+  const keyOk=accessKeyValid(accessKey);
+  const row=userByEmail.get(email);
+  const dummy='$2b$10$3TtZ0N45oW2GLTtStTa/xOYKYmNdFK31yRqt6A3eAuR6wsHBmXOIG';
+  // Always run the password comparison so the reply takes the same time
+  // whether or not the account exists.
   const valid=bcrypt.compareSync(password,row?.password_hash??dummy);
-  if(!row||!row.is_active||!valid)return res.status(401).json({error:'Email or password is incorrect, or the account is inactive.'});
-  const role=toRole(getRoleById.get(row.role_id));if(!role)return res.status(403).json({error:'No active role is assigned to this account.'});
-  const token=randomBytes(32).toString('base64url');const expires=Date.now()+sessionLifetime;const now=new Date().toISOString();
-  db.transaction(()=>{db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)').run(hash(token),row.id,expires,Date.now());db.prepare('UPDATE users SET last_sign_in=? WHERE id=?').run(now,row.id);audit(row.id,'SIGN_IN',`${row.name} signed in.`);})();
-  const user=toUser(getUserById.get(row.id));res.json({user,role,mustChangePassword:Boolean(row.must_change_password),token});
+  if(!keyOk||!row||!row.is_active||!valid)return res.status(401).json({error:'Those sign-in details were not accepted.'});
+
+  const role=toRole(getRoleById.get(row.role_id));
+  if(!role)return res.status(403).json({error:'No active role is assigned to this account.'});
+
+  const challenge=issueChallenge(db,row.id);
+  const delivery=await deliverCode({code:challenge.code,email:row.email,mobile:row.mobile_number,name:row.name});
+  audit(row.id,'SIGN_IN_CHALLENGE',`One-time code issued for ${row.email}.`);
+
+  res.json({
+    otpRequired:true,
+    challengeId:challenge.challengeId,
+    expiresInSeconds:challenge.expiresInSeconds,
+    sentTo:maskEmail(row.email),
+    delivered:delivery.delivered,
+    channel:delivery.channel??null,
+    deliveryIssue:delivery.delivered?null:(delivery.reason??'delivery_failed'),
+  });
 });
+
+function maskEmail(address){
+  const [user,domain]=String(address??'').split('@');
+  if(!domain)return '';
+  const head=user.slice(0,2);
+  return `${head}${'*'.repeat(Math.max(1,user.length-2))}@${domain}`;
+}
+
+/** Step two: the code. A session is issued only here. */
+app.post('/api/auth/login/verify',loginLimiter,(req,res)=>{
+  const result=verifyChallenge(db,req.body?.challengeId,req.body?.code);
+  if(!result.ok)return res.status(401).json({error:result.error});
+
+  const row=getUserById.get(result.userId);
+  if(!row||!row.is_active)return res.status(401).json({error:'That account is no longer active.'});
+  const role=toRole(getRoleById.get(row.role_id));
+  if(!role)return res.status(403).json({error:'No active role is assigned to this account.'});
+
+  const token=randomBytes(32).toString('base64url');const expires=Date.now()+sessionLifetime;const now=new Date().toISOString();
+  db.transaction(()=>{
+    db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)').run(hash(token),row.id,expires,Date.now());
+    db.prepare('UPDATE users SET last_sign_in=? WHERE id=?').run(now,row.id);
+    audit(row.id,'SIGN_IN',`${row.name} signed in.`);
+  })();
+  const user=toUser(getUserById.get(row.id));
+  res.json({user,role,mustChangePassword:Boolean(row.must_change_password),token});
+});
+
+/** Does this deployment ask for an access key? The form needs to know. */
+app.get('/api/auth/policy',(_req,res)=>res.json({
+  accessKeyRequired:accessKeyRequired(),
+  otpRequired:true,
+}));
+
 app.get('/api/auth/me',requireAuth,(req,res)=>res.json({user:req.user,role:req.role}));
 app.post('/api/auth/logout',requireAuth,(req,res)=>{const token=sessionToken(req);db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(token));audit(req.user.id,'SIGN_OUT',`${req.user.name} signed out.`);res.json({ok:true});});
 app.post('/api/auth/change-password',requireAuth,(req,res)=>{const current=String(req.body?.currentPassword??'');const next=String(req.body?.newPassword??'');if(next.length<8||next.length>200)return res.status(400).json({error:'New password must contain at least 8 characters.'});const row=getUserById.get(req.user.id);if(!bcrypt.compareSync(current,row.password_hash))return res.status(400).json({error:'Current password is incorrect.'});db.transaction(()=>{db.prepare('UPDATE users SET password_hash=?,must_change_password=0,password_reset_at=NULL WHERE id=?').run(bcrypt.hashSync(next,12),req.user.id);audit(req.user.id,'PASSWORD_CHANGED','Account password changed.');})();res.json({ok:true});});

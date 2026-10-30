@@ -594,3 +594,38 @@ html::-webkit-scrollbar,body::-webkit-scrollbar,#root::-webkit-scrollbar{display
 #role-name-select{width:100%!important;min-width:0!important}
 @media(max-width:980px){.role-settings-toolbar{grid-template-columns:140px minmax(180px,.85fr) minmax(260px,1.3fr)!important}}
 @media(max-width:700px){.role-settings-toolbar{grid-template-columns:1fr!important}}
+
+
+/* ---------- Two-step staff sign-in ---------- */
+
+/*
+ * Added with the departmental access key and the one-time code. The code is
+ * spaced and centred because it is read off a phone and typed once; the hint
+ * under each field says what it is for, since "access key" next to
+ * "password" is otherwise easy to read as the same thing twice.
+ */
+.field-hint {
+  display: block;
+  margin-top: 5px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: rgba(148, 163, 184, 0.95);
+  font-weight: 500;
+}
+
+.otp-input {
+  text-align: center;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.5em;
+  text-indent: 0.5em;
+  font-variant-numeric: tabular-nums;
+}
+
+.button-ghost {
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: inherit;
+  margin-top: 8px;
+}
+.button-ghost:hover { background: rgba(148, 163, 184, 0.12); }

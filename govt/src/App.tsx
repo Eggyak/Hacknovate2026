@@ -133,6 +133,8 @@ export default function App() {
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [credentialNotice, setCredentialNotice] = useState<{ name: string; email: string; password: string } | null>(null);
+  const [loginChallenge, setLoginChallenge] = useState<{ id: string; sentTo: string; expiresInSeconds: number } | null>(null);
+  const [accessKeyRequired, setAccessKeyRequired] = useState(true);
 
   // Active view navigation
   const [activeView, setActiveView] = useState<ActiveView>('dashboard');
@@ -232,6 +234,12 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    // Whether this deployment asks for a departmental access key is the
+    // server's decision, not the form's; ask rather than assume.
+    api<{ accessKeyRequired: boolean }>('/api/auth/policy')
+      .then((policy) => { if (active) setAccessKeyRequired(Boolean(policy.accessKeyRequired)); })
+      .catch(() => {});
+
     Promise.all([api<{ user: User; role: Role }>('/api/auth/me'), api<{ needsInitialAdmin: boolean }>('/api/auth/setup-status')])
       .then(async ([, setup]) => {
         if (!active) return;
@@ -318,13 +326,48 @@ export default function App() {
   const selectedTicket = tickets.find((t) => t.id === selectedTicketId) ?? null;
 
   // Actions
-  const signIn = async (email: string, password: string) => {
+  /*
+   * Step one: access key, account, password. A session is NOT issued here -
+   * the server replies with a challenge and sends a code to the address on
+   * the staff record, so a leaked password alone reaches nothing.
+   */
+  const signIn = async (email: string, password: string, accessKey: string) => {
     try {
-      const result = await api<{ user: User; role: Role; mustChangePassword: boolean; token: string }>('/api/auth/login', {
+      const result = await api<{
+        otpRequired: boolean; challengeId: string; sentTo: string;
+        expiresInSeconds: number; delivered: boolean; deliveryIssue: string | null;
+      }>('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, accessKey }),
       });
+
+      setLoginChallenge({
+        id: result.challengeId,
+        sentTo: result.sentTo,
+        expiresInSeconds: result.expiresInSeconds,
+      });
+      setLoginError(
+        result.delivered
+          ? ''
+          : 'The code could not be delivered. Check the delivery service before trying again.',
+      );
+    } catch (error) {
+      setLoginChallenge(null);
+      setLoginError(error instanceof Error ? error.message : 'Could not sign in.');
+    }
+  };
+
+  /** Step two: the code. This is the only place a session is created. */
+  const verifySignIn = async (code: string) => {
+    if (!loginChallenge) return;
+    try {
+      const result = await api<{ user: User; role: Role; mustChangePassword: boolean; token: string }>(
+        '/api/auth/login/verify',
+        { method: 'POST', body: JSON.stringify({ challengeId: loginChallenge.id, code }) },
+      );
       sessionStorage.setItem('mha-tab-session', result.token);
+      setLoginChallenge(null);
+
       if (result.mustChangePassword) {
         setSessionUser(result.user);
         setSessionRole(result.role);
@@ -336,7 +379,7 @@ export default function App() {
       setLoginError('');
       setToast(`Welcome back, ${result.user.name}.`);
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : 'Could not sign in.');
+      setLoginError(error instanceof Error ? error.message : 'Could not verify that code.');
     }
   };
 
@@ -525,7 +568,11 @@ export default function App() {
       <SignInScreen
         setup={needsInitialAdmin}
         error={loginError}
+        accessKeyRequired={accessKeyRequired}
+        challenge={loginChallenge}
         onSignIn={signIn}
+        onVerify={verifySignIn}
+        onRestart={() => { setLoginChallenge(null); setLoginError(''); }}
         onClearError={() => setLoginError('')}
         onInitialAdmin={async (payload) => {
           try {
@@ -1653,18 +1700,28 @@ export default function App() {
 function SignInScreen({
   setup,
   error,
+  accessKeyRequired,
+  challenge,
   onSignIn,
+  onVerify,
+  onRestart,
   onClearError,
   onInitialAdmin,
 }: {
   setup: boolean;
   error: string;
-  onSignIn: (email: string, password: string) => void;
+  accessKeyRequired: boolean;
+  challenge: { id: string; sentTo: string; expiresInSeconds: number } | null;
+  onSignIn: (email: string, password: string, accessKey: string) => void;
+  onVerify: (code: string) => void;
+  onRestart: () => void;
   onClearError: () => void;
   onInitialAdmin: (p: { name: string; email: string; mobileNumber: string; password: string }) => void;
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [accessKey, setAccessKey] = useState('');
+  const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [mobileNumber, setMobileNumber] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -1678,8 +1735,10 @@ function SignInScreen({
         return;
       }
       onInitialAdmin({ name, email, mobileNumber, password });
+    } else if (challenge) {
+      onVerify(code);
     } else {
-      onSignIn(email, password);
+      onSignIn(email, password, accessKey);
     }
   };
 
@@ -1706,8 +1765,14 @@ function SignInScreen({
       <div className="login-main">
         <form className="login-form" onSubmit={handleSubmit}>
           <div>
-            <h2>{setup ? 'Initial Administrator Setup' : 'Staff Sign In'}</h2>
-            <p>{setup ? 'Create the first Staff Admin account.' : 'Access your authorized grievance desk.'}</p>
+            <h2>{setup ? 'Initial Administrator Setup' : challenge ? 'Confirm it is you' : 'Staff Sign In'}</h2>
+            <p>
+              {setup
+                ? 'Create the first Staff Admin account.'
+                : challenge
+                  ? `A one-time code was sent to ${challenge.sentTo}. It is valid for ${Math.round(challenge.expiresInSeconds / 60)} minutes.`
+                  : 'Access your authorized grievance desk.'}
+            </p>
           </div>
 
           {error && <div className="notice error">{error}</div>}
@@ -1737,21 +1802,67 @@ function SignInScreen({
             </>
           )}
 
-          <label>
-            Department email / Login ID
-            <input
-              className="input"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                onClearError();
-              }}
-              placeholder="officer@mha.gov.in"
-            />
-          </label>
+          {!challenge && !setup && accessKeyRequired && (
+            <label>
+              Departmental access key
+              <input
+                className="input"
+                type="password"
+                required
+                value={accessKey}
+                autoComplete="off"
+                onChange={(e) => {
+                  setAccessKey(e.target.value);
+                  onClearError();
+                }}
+                placeholder="Issued to your department separately"
+              />
+              <span className="field-hint">
+                Checked before your password. Not your password, and not sent by this portal.
+              </span>
+            </label>
+          )}
 
+          {!challenge && (
+            <label>
+              Department email / Login ID
+              <input
+                className="input"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  onClearError();
+                }}
+                placeholder="officer@mha.gov.in"
+              />
+            </label>
+          )}
+
+          {challenge && (
+            <label>
+              One-time code
+              <input
+                className="input otp-input"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={6}
+                required
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value.replace(/\D/g, ''));
+                  onClearError();
+                }}
+                placeholder="000000"
+              />
+              <span className="field-hint">
+                Sent to the address on your staff record. Never share it.
+              </span>
+            </label>
+          )}
+
+          {!challenge && (
           <label>
             Password
             <div className="password-input-wrap">
@@ -1776,6 +1887,7 @@ function SignInScreen({
               </button>
             </div>
           </label>
+          )}
 
           {setup && (
             <label>
@@ -1792,8 +1904,18 @@ function SignInScreen({
           )}
 
           <button className="button button-primary" type="submit" style={{ marginTop: '6px' }}>
-            {setup ? 'Create Administrator Account' : 'Sign in to Workspace'}
+            {setup ? 'Create Administrator Account' : challenge ? 'Verify and enter workspace' : 'Continue'}
           </button>
+
+          {challenge && (
+            <button
+              type="button"
+              className="button button-ghost"
+              onClick={() => { setCode(''); onRestart(); }}
+            >
+              Start again
+            </button>
+          )}
         </form>
       </div>
     </div>
