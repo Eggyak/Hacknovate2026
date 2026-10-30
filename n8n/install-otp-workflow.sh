@@ -48,6 +48,10 @@ PY
 # workflow, so clear it first and copy to a timestamped name.
 docker exec -u 0 "$CONTAINER" rm -f "/tmp/mha_otp_$TS.json" 2>/dev/null || true
 docker cp "$TMP" "$CONTAINER:/tmp/mha_otp_$TS.json"
+# docker cp lands the file as root, but n8n runs as `node` and cannot read it.
+# The import fails with EACCES, which reads like a corrupt file rather than a
+# permissions problem, so fix it here rather than rediscovering it.
+docker exec -u 0 "$CONTAINER" chmod 644 "/tmp/mha_otp_$TS.json"
 docker exec "$CONTAINER" n8n import:workflow --input="/tmp/mha_otp_$TS.json"
 
 # import:workflow deactivates what it imports, so this has to follow it or the
