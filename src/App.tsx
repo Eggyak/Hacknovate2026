@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { Permission, Role, Ticket, TicketStatus, User, Ward } from './types/grievance';
+import type { AccessLevel, Permission, Role, Ticket, TicketStatus, User, Ward } from './types/grievance';
 import { roles as initialRoles, tickets as initialTickets, wards as initialWards } from './data/mockData';
 
 export interface ActivityEvent {
@@ -32,6 +32,22 @@ const noAccessRole: Role = {
   scopeType: 'WARD',
   wardIds: [],
   isSystem: true,
+};
+
+const permissionCatalog: readonly [Permission, string][] = [
+  ['tickets:read', 'Read grievance tickets in assigned scope'],
+  ['tickets:resolve', 'Resolve grievances & submit action reports'],
+  ['tickets:reroute', 'Reroute cases and change triage statuses'],
+  ['users:manage', 'Manage staff accounts and permissions'],
+  ['analytics:view', 'View jurisdiction analytics & audit records'],
+];
+
+const permissionsByAccessLevel: Record<AccessLevel, Permission[]> = {
+  SUPER_ADMIN: ['tickets:read', 'tickets:resolve', 'tickets:reroute', 'users:manage', 'analytics:view'],
+  DIVISION_ADMIN: ['tickets:read', 'tickets:resolve', 'tickets:reroute', 'analytics:view'],
+  L1_RESOLVING_OFFICER: ['tickets:read', 'tickets:resolve', 'tickets:reroute'],
+  APPELLATE_AUTHORITY: ['tickets:read', 'tickets:resolve', 'analytics:view'],
+  OTHER_CASE_TRIAGE: ['tickets:read', 'tickets:reroute'],
 };
 
 function persisted<T>(key: string, fallback: T): T {
@@ -85,6 +101,7 @@ function categoryLabel(category: Ticket['category']) {
       POLICE: 'Police',
       CENTRE_STATE: 'Centre–State',
       INTERNAL_DIVISIONS: 'Internal divisions',
+      OTHER: 'Other department triage',
     } as const)[category] || category
   );
 }
@@ -138,7 +155,9 @@ export default function App() {
 
   // Role Management State
   const [selectedRoleId, setSelectedRoleId] = useState('');
+  const [selectedRoleDepartment, setSelectedRoleDepartment] = useState('CYBER_INFORMATION_SECURITY');
   const [roleName, setRoleName] = useState('');
+  const [roleAccessLevel, setRoleAccessLevel] = useState<AccessLevel>('DIVISION_ADMIN');
   const [rolePermissions, setRolePermissions] = useState<Permission[]>([]);
 
   // Accessibility Font scale
@@ -245,11 +264,31 @@ export default function App() {
   }, [toast]);
 
   // Sync role editor when selected role changes
-  const currentRole = roles.find((r) => r.id === selectedRoleId) ?? roles[0];
+  const roleDepartments = [
+    { id: 'CYBER_INFORMATION_SECURITY', name: 'Cyber & Information Security', divisions: ['CYBER_INFORMATION_SECURITY'] },
+    { id: 'FOREIGNERS', name: 'Foreigners & Immigration', divisions: ['FOREIGNERS'] },
+    { id: 'DISASTER_MANAGEMENT', name: 'Disaster Management (NDRF & Relief)', divisions: ['DISASTER_MANAGEMENT'] },
+    { id: 'CAPF_POLICE', name: 'CAPF & Police', divisions: ['CENTRAL_ARMED_POLICE_FORCES', 'POLICE'] },
+    { id: 'NGO_FCRA', name: 'FCRA & NGO', divisions: ['NGO_FCRA'] },
+    { id: 'UT_ADMINISTRATION', name: 'Union Territory Administration', divisions: ['UT_ADMINISTRATION'] },
+    { id: 'FREEDOM_FIGHTERS_REHABILITATION', name: 'Freedom Fighters & Rehabilitation', divisions: ['FREEDOM_FIGHTERS_REHABILITATION'] },
+    { id: 'CTCR_INTERNAL_SECURITY', name: 'CTCR & Internal Security', divisions: ['COUNTER_TERRORISM', 'INTERNAL_SECURITY', 'LWE_NORTH_EAST'] },
+    { id: 'OTHER_TRIAGE', name: 'Other Cases Triage', divisions: ['OTHER_TRIAGE'] },
+    { id: 'NATIONAL_WARD', name: 'National / Ward Operations', divisions: [] },
+    { id: 'OTHER_DIVISIONS', name: 'Other MHA Divisions', divisions: ['BORDER_MANAGEMENT', 'JUDICIAL', 'CENTRE_STATE', 'INTERNAL_ADMINISTRATION'] },
+  ];
+  const activeDepartment = roleDepartments.find((department) => department.id === selectedRoleDepartment) ?? roleDepartments[0];
+  const departmentRoles = roles.filter((role) => activeDepartment.divisions.length
+    ? activeDepartment.divisions.includes(role.divisionId ?? '')
+    : !role.divisionId);
+  const currentRole = departmentRoles.find((role) => role.id === selectedRoleId) ?? departmentRoles[0] ?? roles[0];
+  const availableRolePermissions = permissionsByAccessLevel[roleAccessLevel];
   useEffect(() => {
     if (currentRole) {
       setRoleName(currentRole.name);
-      setRolePermissions(currentRole.permissions);
+      const level = currentRole.accessLevel ?? (currentRole.scopeType === 'WARD' ? 'L1_RESOLVING_OFFICER' : 'DIVISION_ADMIN');
+      setRoleAccessLevel(level);
+      setRolePermissions(currentRole.permissions.filter((permission) => permissionsByAccessLevel[level].includes(permission)));
     }
   }, [selectedRoleId, roles]);
 
@@ -349,6 +388,17 @@ export default function App() {
     }
   };
 
+  const routeOtherCase = async (id: string, divisionId: string) => {
+    try {
+      await api<Ticket>(`/api/tickets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ routeToDivisionId: divisionId }) });
+      setTickets((current) => current.filter((ticket) => ticket.id !== id));
+      setSelectedTicketId(null);
+      setToast('Case analyzed and forwarded to the selected department.');
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Could not route this case.');
+    }
+  };
+
   const addUser = async (user: User) => {
     try {
       const saved = await api<User & { temporaryPassword?: string }>('/api/users', {
@@ -429,7 +479,7 @@ export default function App() {
     try {
       const saved = await api<Role>(`/api/roles/${encodeURIComponent(currentRole.id)}`, {
         method: 'PATCH',
-        body: JSON.stringify({ name: roleName, description: currentRole.description, permissions: rolePermissions }),
+        body: JSON.stringify({ name: roleName, description: currentRole.description, permissions: rolePermissions, accessLevel: roleAccessLevel }),
       });
       setRoles((curr) => curr.map((r) => (r.id === saved.id ? saved : r)));
       setToast(`Permissions updated for ${saved.name}.`);
@@ -481,9 +531,9 @@ export default function App() {
           try {
             await api('/api/auth/initial-admin', { method: 'POST', body: JSON.stringify(payload) });
             setNeedsInitialAdmin(false);
-            setLoginError('Super Admin account created. Sign in using your credentials.');
+            setLoginError('Staff Admin account created. Sign in using your credentials.');
           } catch (err) {
-            setLoginError(err instanceof Error ? err.message : 'Could not create Super Admin.');
+            setLoginError(err instanceof Error ? err.message : 'Could not create Staff Admin.');
           }
         }}
       />
@@ -1034,16 +1084,31 @@ export default function App() {
                   <div className="panel-body">
                     <div className="role-settings-card">
                       <div className="role-settings-toolbar">
-                        <strong>Select Role</strong>
+                        <strong>Select Department &amp; Role</strong>
                         <select
                           className="select"
-                          style={{ width: '260px' }}
-                          value={selectedRoleId || currentRole?.id}
+                          id="role-department-select"
+                          value={selectedRoleDepartment}
+                          onChange={(event) => {
+                            const nextDepartment = roleDepartments.find((department) => department.id === event.target.value)!;
+                            const nextRoles = roles.filter((role) => nextDepartment.divisions.length
+                              ? nextDepartment.divisions.includes(role.divisionId ?? '')
+                              : !role.divisionId);
+                            setSelectedRoleDepartment(event.target.value);
+                            setSelectedRoleId(nextRoles[0]?.id ?? '');
+                          }}
+                        >
+                          {roleDepartments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+                        </select>
+                        <select
+                          className="select"
+                          id="role-name-select"
+                          value={currentRole?.id ?? ''}
                           onChange={(e) => setSelectedRoleId(e.target.value)}
                         >
-                          {roles.map((r) => (
+                          {departmentRoles.map((r) => (
                             <option key={r.id} value={r.id}>
-                              {r.name} {r.isSystem ? '· System' : ''}
+                              {r.name} · {r.accessLevel ?? (r.scopeType === 'WARD' ? 'L1_RESOLVING_OFFICER' : 'DIVISION_ADMIN')}
                             </option>
                           ))}
                         </select>
@@ -1068,6 +1133,25 @@ export default function App() {
                                 {currentRole.wardIds?.length ? ` · ${currentRole.wardIds.join(', ')}` : ''}
                               </strong>
                             </div>
+                            <label className="field">
+                              <span>Vertical access level</span>
+                              <select className="select" value={roleAccessLevel} onChange={(event) => {
+                                const nextLevel = event.target.value as AccessLevel;
+                                if (nextLevel === 'SUPER_ADMIN' && currentRole.id !== 'ROLE-SUPER-ADMIN') {
+                                  setToast('Super Admin access is reserved for the protected Staff Admin role.');
+                                  return;
+                                }
+                                setRoleAccessLevel(nextLevel);
+                                const nextAvailable = permissionsByAccessLevel[nextLevel];
+                                setRolePermissions((current) => current.filter((permission) => nextAvailable.includes(permission)));
+                              }}>
+                                {currentRole.id === 'ROLE-SUPER-ADMIN' && <option value="SUPER_ADMIN">Super Admin</option>}
+                                <option value="DIVISION_ADMIN">Division Admin</option>
+                                <option value="L1_RESOLVING_OFFICER">L1 Resolving Officer</option>
+                                <option value="APPELLATE_AUTHORITY">Appellate Authority</option>
+                                {currentRole.divisionId === 'OTHER_TRIAGE' && <option value="OTHER_CASE_TRIAGE">Other Case Triage Officer</option>}
+                              </select>
+                            </label>
                           </div>
 
                           <div className="permission-matrix">
@@ -1075,15 +1159,7 @@ export default function App() {
                               <span>Permission Module</span>
                               <span>Access Granted</span>
                             </div>
-                            {(
-                              [
-                                ['tickets:read', 'Read grievance tickets in assigned scope'],
-                                ['tickets:resolve', 'Resolve grievances & submit action reports'],
-                                ['tickets:reroute', 'Reroute cases and change triage statuses'],
-                                ['users:manage', 'Manage staff accounts and permissions'],
-                                ['analytics:view', 'View jurisdiction analytics & audit records'],
-                              ] as const
-                            ).map(([perm, label]) => (
+                            {permissionCatalog.filter(([permission]) => availableRolePermissions.includes(permission)).map(([perm, label]) => (
                               <label className="permission-matrix-row" key={perm}>
                                 <span>{label}</span>
                                 <input
@@ -1098,11 +1174,14 @@ export default function App() {
                               </label>
                             ))}
                           </div>
+                          <p className="table-secondary" style={{ margin: '8px 0 0' }}>
+                            Permission modules are limited by this role’s access level. Department or ward scope still determines which cases the role can access.
+                          </p>
 
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span className="table-secondary">
                               {currentRole.isSystem
-                                ? 'System role. Super Admin can edit this role and its permissions.'
+                                ? 'System role. Staff Admin can edit this role and its permissions.'
                                 : `${rolePermissions.length} permissions enabled.`}
                             </span>
                             <button className="button button-primary" onClick={updateRole}>
@@ -1119,7 +1198,7 @@ export default function App() {
                 <div className="panel" style={{ marginTop: '14px' }}>
                   <div className="panel-head">
                     <h3>Available roles</h3>
-                    <span className="table-secondary">{roles.length} roles</span>
+                    <span className="table-secondary">{departmentRoles.length} roles</span>
                   </div>
                   <div className="table-wrap">
                     <table>
@@ -1131,7 +1210,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {roles.map((role) => (
+                        {departmentRoles.map((role) => (
                           <tr
                             key={role.id}
                             onClick={() => {
@@ -1337,6 +1416,7 @@ export default function App() {
             role={activeRole}
             onClose={() => setSelectedTicketId(null)}
             onSubmit={submitReport}
+            onRoute={routeOtherCase}
           />
         </>
       )}
@@ -1623,7 +1703,7 @@ function SignInScreen({
         <form className="login-form" onSubmit={handleSubmit}>
           <div>
             <h2>{setup ? 'Initial Administrator Setup' : 'Staff Sign In'}</h2>
-            <p>{setup ? 'Create the first Super Admin account.' : 'Access your authorized grievance desk.'}</p>
+            <p>{setup ? 'Create the first Staff Admin account.' : 'Access your authorized grievance desk.'}</p>
           </div>
 
           {error && <div className="notice error">{error}</div>}
@@ -1721,15 +1801,19 @@ function TicketDrawer({
   role,
   onClose,
   onSubmit,
+  onRoute,
 }: {
   ticket: Ticket;
   role: Role;
   onClose: () => void;
   onSubmit: (id: string, status: TicketStatus, report: string) => void;
+  onRoute: (id: string, divisionId: string) => void;
 }) {
   const [status, setStatus] = useState<TicketStatus>(ticket.status);
   const [report, setReport] = useState(ticket.actionTakenReport ?? '');
   const [tab, setTab] = useState<'context' | 'timeline'>('context');
+  const [routeDivision, setRouteDivision] = useState('CYBER_INFORMATION_SECURITY');
+  const canTriageOther = role.accessLevel === 'OTHER_CASE_TRIAGE' && ticket.category === 'OTHER';
 
   const canAct = role.permissions.includes('tickets:resolve') || role.permissions.includes('tickets:reroute');
   const details = Object.entries(ticket.details).map(([key, value]) => ({
@@ -1922,15 +2006,25 @@ function TicketDrawer({
 
       <footer className="action-desk">
         <div className="action-desk-title">
-          <b>Official Action Desk</b>
-          <span>Record resolution findings</span>
+          <b>{canTriageOther ? 'Other Case Triage Desk' : 'Official Action Desk'}</b>
+          <span>{canTriageOther ? 'Review the complaint and forward it to the correct MHA department.' : 'Record resolution findings'}</span>
         </div>
+        {canTriageOther && <>
+          <label>FORWARD TO DEPARTMENT
+            <select className="select" value={routeDivision} onChange={(event) => setRouteDivision(event.target.value)}>
+              {([
+                ['CYBER_INFORMATION_SECURITY','Cyber & Information Security'],['FOREIGNERS','Foreigners & Immigration'],['DISASTER_MANAGEMENT','Disaster Management'],['CENTRAL_ARMED_POLICE_FORCES','CAPF & Police'],['NGO_FCRA','FCRA & NGO'],['UT_ADMINISTRATION','UT Administration'],['FREEDOM_FIGHTERS_REHABILITATION','Freedom Fighters & Rehabilitation'],['COUNTER_TERRORISM','Counter Terrorism & Internal Security'],
+              ] as const).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+          </label>
+          <button className="button button-primary" onClick={() => onRoute(ticket.id, routeDivision)}>Forward case</button>
+        </>}
         <label>
           CASE STATUS
           <select
             className="select"
             value={status}
-            disabled={!canAct}
+            disabled={!canAct || canTriageOther}
             onChange={(e) => setStatus(e.target.value as TicketStatus)}
           >
             <option value="PENDING">Pending</option>
@@ -1943,7 +2037,7 @@ function TicketDrawer({
           <textarea
             className="input"
             rows={3}
-            disabled={!canAct}
+            disabled={!canAct || canTriageOther}
             value={report}
             placeholder="Document investigation findings, dispatched orders, or citizen resolution..."
             onChange={(e) => setReport(e.target.value)}
@@ -1951,7 +2045,7 @@ function TicketDrawer({
         </label>
         <button
           className="button button-primary"
-          disabled={!canAct || !report.trim()}
+          disabled={!canAct || canTriageOther || !report.trim()}
           onClick={() => onSubmit(ticket.id, status, report.trim())}
         >
           Submit Resolution
@@ -1966,11 +2060,16 @@ function EditStaffForm({ user, roles, onClose, onSave }: { user: User; roles: Ro
   const [email, setEmail] = useState(user.email);
   const [roleId, setRoleId] = useState(user.roleId);
   const [isActive, setIsActive] = useState(user.isActive);
+  const roleDepartments = Array.from(new Set(roles.filter((role) => role.id !== 'ROLE-SUPER-ADMIN' && role.divisionId).map((role) => role.divisionId!)));
+  const currentRole = roles.find((role) => role.id === roleId);
+  const [departmentId, setDepartmentId] = useState(currentRole?.divisionId ?? 'WARD_OPERATIONS');
+  const departmentRoles = roles.filter((role) => role.id !== 'ROLE-SUPER-ADMIN' && (departmentId === 'WARD_OPERATIONS' ? !role.divisionId : role.divisionId === departmentId));
   return <form onSubmit={(event) => { event.preventDefault(); onSave({ ...user, name: name.trim(), email: email.trim(), roleId, isActive }); }}>
     <div className="dialog-body">
       <label className="field"><span className="field-label">Full name</span><input className="input" required value={name} onChange={(event) => setName(event.target.value)} /></label>
       <label className="field"><span className="field-label">Login ID / Department email</span><input className="input" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-      <label className="field"><span className="field-label">Role</span><select className="select" value={roleId} onChange={(event) => setRoleId(event.target.value)}>{roles.filter((role) => role.id !== 'ROLE-SUPER-ADMIN').map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
+      <label className="field"><span className="field-label">Department</span><select className="select" value={departmentId} onChange={(event) => { const nextDepartment = event.target.value; setDepartmentId(nextDepartment); const firstRole = roles.find((role) => role.id !== 'ROLE-SUPER-ADMIN' && (nextDepartment === 'WARD_OPERATIONS' ? !role.divisionId : role.divisionId === nextDepartment)); if (firstRole) setRoleId(firstRole.id); }}><option value="WARD_OPERATIONS">National / Ward Operations</option>{roleDepartments.map((divisionId) => <option key={divisionId} value={divisionId}>{divisionId === 'OTHER_TRIAGE' ? 'Other Cases Triage' : divisionId.replaceAll('_', ' ')}</option>)}</select></label>
+      <label className="field"><span className="field-label">Role</span><select className="select" value={roleId} onChange={(event) => setRoleId(event.target.value)}>{departmentRoles.map((role) => <option key={role.id} value={role.id}>{role.name} · {role.accessLevel ?? role.scopeType}</option>)}</select></label>
       <label className="toolbar"><input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.target.checked)} /> <span className="field-label">Account active</span></label>
     </div>
     <div className="dialog-actions"><button type="button" className="button button-quiet" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary">Save changes</button></div>
@@ -2107,8 +2206,10 @@ function NewRoleForm({
   const [description, setDescription] = useState('');
   const [scope, setScope] = useState<Role['scopeType']>('WARD');
   const [division, setDivision] = useState<Role['divisionId']>('CYBER_INFORMATION_SECURITY');
+  const [accessLevel, setAccessLevel] = useState<AccessLevel>('L1_RESOLVING_OFFICER');
   const [perms, setPerms] = useState<Permission[]>(['tickets:read']);
   const [selectedWards, setSelectedWards] = useState<string[]>([]);
+  const grantablePermissions = permissionsByAccessLevel[accessLevel];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -2119,6 +2220,7 @@ function NewRoleForm({
       description: description.trim() || 'Custom department role.',
       permissions: perms,
       scopeType: scope,
+      accessLevel,
       ...(scope === 'DIVISION' ? { divisionId: division } : {}),
       ...(scope === 'WARD' ? { wardIds: selectedWards } : {}),
       isSystem: false,
@@ -2143,17 +2245,32 @@ function NewRoleForm({
         </label>
         <label className="field">
           <span className="field-label">JURISDICTION SCOPE</span>
-          <select className="select" value={scope} onChange={(e) => setScope(e.target.value as Role['scopeType'])}>
+          <select className="select" value={scope} onChange={(e) => { const nextScope = e.target.value as Role['scopeType']; setScope(nextScope); if (accessLevel === 'OTHER_CASE_TRIAGE' && nextScope !== 'DIVISION') setAccessLevel('DIVISION_ADMIN'); }}>
             <option value="GLOBAL">GLOBAL (National coverage)</option>
             <option value="DIVISION">DIVISION (Single MHA division)</option>
             <option value="WARD">WARD (Assigned ward list)</option>
           </select>
         </label>
 
+        <label className="field">
+          <span className="field-label">VERTICAL ACCESS LEVEL</span>
+          <select className="select" value={accessLevel} onChange={(event) => {
+            const nextLevel = event.target.value as AccessLevel;
+            setAccessLevel(nextLevel);
+            const allowed = permissionsByAccessLevel[nextLevel];
+            setPerms((current) => current.filter((permission) => allowed.includes(permission)));
+          }}>
+            <option value="DIVISION_ADMIN">Division Admin</option>
+            <option value="L1_RESOLVING_OFFICER">L1 Resolving Officer</option>
+            <option value="APPELLATE_AUTHORITY">Appellate Authority</option>
+            {scope === 'DIVISION' && division === 'OTHER_TRIAGE' && <option value="OTHER_CASE_TRIAGE">Other Case Triage Officer</option>}
+          </select>
+        </label>
+
         {scope === 'DIVISION' && (
           <label className="field">
             <span className="field-label">MHA DIVISION</span>
-            <select className="select" value={division} onChange={(e) => setDivision(e.target.value as Role['divisionId'])}>
+            <select className="select" value={division} onChange={(e) => { const nextDivision = e.target.value as Role['divisionId']; setDivision(nextDivision); if (accessLevel === 'OTHER_CASE_TRIAGE' && nextDivision !== 'OTHER_TRIAGE') setAccessLevel('DIVISION_ADMIN'); }}>
               {[
                 'CYBER_INFORMATION_SECURITY',
                 'FOREIGNERS',
@@ -2170,6 +2287,7 @@ function NewRoleForm({
                 'POLICE',
                 'CENTRE_STATE',
                 'INTERNAL_ADMINISTRATION',
+                'OTHER_TRIAGE',
               ].map((d) => (
                 <option key={d} value={d}>
                   {d.replaceAll('_', ' ')}
@@ -2204,15 +2322,7 @@ function NewRoleForm({
         <div className="field">
           <span className="field-label">PERMISSIONS</span>
           <div style={{ display: 'grid', gap: '6px' }}>
-            {(
-              [
-                ['tickets:read', 'Read grievance tickets'],
-                ['tickets:resolve', 'Resolve grievances'],
-                ['tickets:reroute', 'Reroute cases'],
-                ['users:manage', 'Manage staff accounts'],
-                ['analytics:view', 'View analytics & audit'],
-              ] as const
-            ).map(([perm, label]) => (
+            {permissionCatalog.filter(([permission]) => grantablePermissions.includes(permission)).map(([perm, label]) => (
               <label key={perm} style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '11px' }}>
                 <input
                   type="checkbox"

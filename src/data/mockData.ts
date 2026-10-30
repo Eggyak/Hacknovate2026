@@ -13,7 +13,7 @@ export const wards: Ward[] = [
 
 export const roles: Role[] = [
   {
-    id: 'ROLE-SUPER-ADMIN', name: 'Super Admin', description: 'National oversight and user administration.',
+    id: 'ROLE-SUPER-ADMIN', name: 'Staff Admin', description: 'National oversight and user administration.',
     permissions: ['tickets:read', 'tickets:resolve', 'tickets:reroute', 'users:manage', 'analytics:view'],
     scopeType: 'GLOBAL', isSystem: true,
   },

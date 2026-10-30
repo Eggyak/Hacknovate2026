@@ -8,6 +8,7 @@ export type Permission =
   | 'analytics:view';
 
 export type ScopeType = 'GLOBAL' | 'DIVISION' | 'WARD';
+export type AccessLevel = 'SUPER_ADMIN' | 'DIVISION_ADMIN' | 'L1_RESOLVING_OFFICER' | 'APPELLATE_AUTHORITY' | 'OTHER_CASE_TRIAGE';
 
 export type TicketStatus = 'PENDING' | 'UNDER_INVESTIGATION' | 'RESOLVED';
 export type SlaStatus = 'ON_TIME' | 'WARNING' | 'OVERDUE';
@@ -27,7 +28,8 @@ export type DivisionId =
   | 'JUDICIAL'
   | 'POLICE'
   | 'CENTRE_STATE'
-  | 'INTERNAL_ADMINISTRATION';
+  | 'INTERNAL_ADMINISTRATION'
+  | 'OTHER_TRIAGE';
 
 export type TicketCategory =
   | 'CYBERCRIME'
@@ -44,7 +46,8 @@ export type TicketCategory =
   | 'JUDICIAL'
   | 'POLICE'
   | 'CENTRE_STATE'
-  | 'INTERNAL_DIVISIONS';
+  | 'INTERNAL_DIVISIONS'
+  | 'OTHER';
 
 export interface GeoCoordinates {
   latitude: number;
@@ -79,6 +82,7 @@ export interface Role {
   /** Required for WARD scope; users may further restrict this list. */
   wardIds?: string[];
   isSystem: boolean;
+  accessLevel?: AccessLevel;
 }
 
 export interface User {
@@ -251,7 +255,8 @@ export type Ticket =
   | (TicketBase & { category: 'JUDICIAL'; divisionId: 'JUDICIAL'; details: JudicialDetails })
   | (TicketBase & { category: 'POLICE'; divisionId: 'POLICE'; details: PoliceDetails })
   | (TicketBase & { category: 'CENTRE_STATE'; divisionId: 'CENTRE_STATE'; details: CentreStateDetails })
-  | (TicketBase & { category: 'INTERNAL_DIVISIONS'; divisionId: 'INTERNAL_ADMINISTRATION'; details: InternalDivisionsDetails });
+  | (TicketBase & { category: 'INTERNAL_DIVISIONS'; divisionId: 'INTERNAL_ADMINISTRATION'; details: InternalDivisionsDetails })
+  | (TicketBase & { category: 'OTHER'; divisionId: 'OTHER_TRIAGE'; details: Record<string, unknown> });
 
 export interface CreateRoleInput {
   name: string;

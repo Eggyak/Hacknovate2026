@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS roles (
   id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '',
   permissions_json TEXT NOT NULL, scope_type TEXT NOT NULL CHECK(scope_type IN ('GLOBAL','DIVISION','WARD')),
   division_id TEXT, ward_ids_json TEXT NOT NULL DEFAULT '[]', is_system INTEGER NOT NULL DEFAULT 0,
+  access_level TEXT NOT NULL DEFAULT 'DIVISION_ADMIN',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS users (
@@ -51,6 +52,9 @@ CREATE TABLE IF NOT EXISTS activity_events (
 CREATE INDEX IF NOT EXISTS idx_events_created ON activity_events(created_at DESC);
 CREATE TABLE IF NOT EXISTS app_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 `);
+
+const roleColumns = db.prepare('PRAGMA table_info(roles)').all().map(column => column.name);
+if (!roleColumns.includes('access_level')) db.exec("ALTER TABLE roles ADD COLUMN access_level TEXT NOT NULL DEFAULT 'DIVISION_ADMIN'");
 
 // Keep existing SQLite databases compatible with password rotation metadata.
 const userColumns = db.prepare('PRAGMA table_info(users)').all().map(column => column.name);
@@ -93,12 +97,13 @@ export const divisions = [
   ['POLICE','Police Divisions','POLICE'],
   ['CENTRE_STATE','Centre-State Division','CENTRE_STATE'],
   ['INTERNAL_ADMINISTRATION','Internal Divisions','INTERNAL_DIVISIONS'],
+  ['OTHER_TRIAGE','Other Cases Triage','OTHER'],
 ];
 
 export const toRole = row => row && ({
   id: row.id, name: row.name, description: row.description, permissions: JSON.parse(row.permissions_json),
   scopeType: row.scope_type, ...(row.division_id ? { divisionId: row.division_id } : {}),
-  wardIds: JSON.parse(row.ward_ids_json), isSystem: Boolean(row.is_system),
+  wardIds: JSON.parse(row.ward_ids_json), isSystem: Boolean(row.is_system), accessLevel: row.access_level ?? (row.id==='ROLE-SUPER-ADMIN'?'SUPER_ADMIN':row.scope_type==='WARD'?'L1_RESOLVING_OFFICER':'DIVISION_ADMIN'),
 });
 export const toUser = row => row && ({
   id: row.id, name: row.name, email: row.email, mobileNumber: row.mobile_number, roleId: row.role_id,
@@ -136,10 +141,10 @@ export function seedDatabase() {
   if (roleCount === 0) {
     const insertRole = db.prepare('INSERT INTO roles(id,name,description,permissions_json,scope_type,division_id,ward_ids_json,is_system) VALUES(?,?,?,?,?,?,?,?)');
     const roleRows = [
-      ['ROLE-SUPER-ADMIN','Super Admin','National oversight and administration.',permissions,'GLOBAL',null,[],1],
+      ['ROLE-SUPER-ADMIN','Staff Admin','National oversight and administration.',permissions,'GLOBAL',null,[],1],
       ['ROLE-WARD-DESK','Ward Desk Officer','Local grievance queue for assigned wards.',['tickets:read','tickets:resolve','tickets:reroute'],'WARD',null,['WARD-101'],1],
       ['ROLE-MULTI-WARD','Multi-Ward Supervisor','Supervision for assigned wards.',['tickets:read','tickets:resolve','tickets:reroute','analytics:view'],'WARD',null,['WARD-101','WARD-102'],1],
-      ...divisions.map(([id,name])=>[`ROLE-${id}`,`${name} Officer`,`Division-scoped grievance desk for ${name}.`,['tickets:read','tickets:resolve','tickets:reroute','analytics:view'],'DIVISION',id,[],1]),
+      ...divisions.filter(([id])=>id!=='OTHER_TRIAGE').map(([id,name])=>[`ROLE-${id}`,`${name} Officer`,`Division-scoped grievance desk for ${name}.`,['tickets:read','tickets:resolve','tickets:reroute','analytics:view'],'DIVISION',id,[],1]),
     ];
     const insertW = db.prepare('INSERT OR IGNORE INTO wards(id,name,district,state,pincode_prefix,zone) VALUES(?,?,?,?,?,?)');
     const tx = db.transaction(() => {
@@ -147,6 +152,35 @@ export function seedDatabase() {
       wardSeeds.forEach(ward=>insertW.run(...ward));
     }); tx();
   }
+  db.prepare("UPDATE roles SET access_level='SUPER_ADMIN' WHERE id='ROLE-SUPER-ADMIN'").run();
+  db.prepare("UPDATE roles SET access_level='L1_RESOLVING_OFFICER' WHERE scope_type='WARD' AND id<>'ROLE-SUPER-ADMIN'").run();
+  db.prepare("UPDATE roles SET access_level='DIVISION_ADMIN' WHERE scope_type='DIVISION'").run();
+  const levels = [
+    ['CYBER_INFORMATION_SECURITY','Cyber & Information Security'], ['FOREIGNERS','Foreigners & Immigration'],
+    ['DISASTER_MANAGEMENT','Disaster Management (NDRF & Relief)'], ['CENTRAL_ARMED_POLICE_FORCES','CAPF & Police'],
+    ['NGO_FCRA','FCRA & NGO'], ['UT_ADMINISTRATION','Union Territory Administration'],
+    ['FREEDOM_FIGHTERS_REHABILITATION','Freedom Fighters & Rehabilitation'], ['COUNTER_TERRORISM','Counter Terrorism, Radicalization & Internal Security'],
+  ];
+  const addLevelRole = db.prepare('INSERT OR IGNORE INTO roles(id,name,description,permissions_json,scope_type,division_id,ward_ids_json,is_system,access_level) VALUES(?,?,?,?,?,?,?,?,?)');
+  for (const [divisionId, label] of levels) {
+    const base = `ROLE-${divisionId}`;
+    const definition = db.prepare('SELECT permissions_json FROM roles WHERE id=?').get(base);
+    const perms = definition?.permissions_json ?? JSON.stringify(['tickets:read','tickets:resolve','tickets:reroute']);
+    addLevelRole.run(`ROLE-L1-${divisionId}`, `${label} · L1 Resolving Officer`, `Assigned-ward case handling for ${label}.`, perms, 'WARD', divisionId, '[]', 1, 'L1_RESOLVING_OFFICER');
+    addLevelRole.run(`ROLE-APPEAL-${divisionId}`, `${label} · Appellate Authority`, `Appeals-only review for ${label}.`, JSON.stringify(['tickets:read','analytics:view']), 'DIVISION', divisionId, '[]', 1, 'APPELLATE_AUTHORITY');
+  }
+  // Retire the former cross-department triage role. Keep any associated account
+  // working with the least-privileged ward role until an administrator reassigns it.
+  if (!db.prepare("SELECT 1 FROM app_migrations WHERE id='retire-other-triage-role'").get()) {
+    db.transaction(() => {
+      const legacyRole = db.prepare("SELECT 1 FROM roles WHERE id='ROLE-OTHER-CASE-TRIAGE'").get();
+      const wardRole = db.prepare("SELECT id FROM roles WHERE id='ROLE-WARD-DESK'").get();
+      if (legacyRole && wardRole) db.prepare("UPDATE users SET role_id=? WHERE role_id='ROLE-OTHER-CASE-TRIAGE'").run(wardRole.id);
+      db.prepare("DELETE FROM roles WHERE id='ROLE-OTHER-CASE-TRIAGE'").run();
+      db.prepare("INSERT INTO app_migrations(id) VALUES('retire-other-triage-role')").run();
+    })();
+  }
+  addLevelRole.run('ROLE-OTHER-CASE-TRIAGE','Other Case Triage Officer','Reviews complaints assigned to the Other department and routes them to the correct MHA division.',JSON.stringify(['tickets:read','tickets:reroute']),'DIVISION','OTHER_TRIAGE','[]',1,'OTHER_CASE_TRIAGE');
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
 }
 
