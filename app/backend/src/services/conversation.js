@@ -299,10 +299,19 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
     }
   }
 
-  // Fetch this language's division names once, in the background. The reply
-  // being composed now may still say the English name; the next one will not.
+  /*
+   * Fetch this language's division names.
+   *
+   * On the turn where the language CHANGES this is awaited, because that is
+   * precisely the reply that names a division - "this looks like a matter
+   * for..." - and it is the citizen's first sight of the bot in their own
+   * language. One request, once per language per process, is worth paying
+   * for at that moment. Otherwise it runs in the background and the cache is
+   * already warm by the next turn.
+   */
   if (language && language !== 'en') {
-    warmDivisionNames(language, DIVISIONS).catch(() => {});
+    const warm = warmDivisionNames(language, DIVISIONS).catch(() => {});
+    if (language !== previousLanguage) await warm;
   }
 
   if (identification) {

@@ -386,8 +386,9 @@ async function runLanguageFollowing() {
     `got ${punjabi.data.language}`);
   check('the switch is reported', punjabi.data.detected?.code === 'pa',
     JSON.stringify(punjabi.data.detected?.method));
-  check('the bot now replies in Punjabi', /[਀-੿]/.test(punjabi.data.bot?.text || ''),
-    (punjabi.data.bot?.text || '').slice(0, 40));
+  const reply = punjabi.data.bot?.text || '';
+  check('the bot now replies in Punjabi', /[਀-੿]/.test(reply), reply.slice(0, 50));
+  check('including the division name', !/Cyber & Information Security/.test(reply), reply.slice(0, 60));
 
   await api(`/chat/${id}/division`, { method: 'POST', body: { divisionId: 'cyber' } });
 
