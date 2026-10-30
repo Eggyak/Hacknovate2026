@@ -2042,19 +2042,23 @@ async function viewDetail(reference) {
   }
 
   /*
-   * Object key order is insertion order, which for an unlisted complaint is
-   * whatever order the answers happened to be written - not the order the
-   * citizen was asked. The stored questions carry the real sequence.
+   * The questions an unlisted complaint was asked, in the order it was asked
+   * them. Stored as an array precisely because JSONB would have reordered an
+   * object and left the record reading as a jumble.
    */
-  const labelOrder = Object.keys(g.dynamic_labels || {});
+  const asked = Array.isArray(g.dynamic_labels) ? g.dynamic_labels : [];
+  const askedLabel = new Map(asked.map((q) => [q.key, q.label]));
+  const askedOrder = asked.map((q) => q.key);
+
   const details = Object.entries(g.dynamic_details || {}).sort((a, b) => {
-    const ia = labelOrder.indexOf(a[0]);
-    const ib = labelOrder.indexOf(b[0]);
+    const ia = askedOrder.indexOf(a[0]);
+    const ib = askedOrder.indexOf(b[0]);
     if (ia === -1 && ib === -1) return 0;
     if (ia === -1) return 1;
     if (ib === -1) return -1;
     return ia - ib;
   });
+
   /*
    * A listed division names its own fields. An unlisted complaint was asked
    * questions written for it, which were stored alongside the answers - and
@@ -2062,7 +2066,7 @@ async function viewDetail(reference) {
    * to the citizen who answered them.
    */
   const fieldLabel = (key) => (g.division?.fields || []).find((f) => f.key === key)?.label
-    || g.dynamic_labels?.[key]
+    || askedLabel.get(key)
     || key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
   setView(`

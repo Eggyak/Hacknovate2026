@@ -160,7 +160,7 @@ export async function createGrievance(input) {
     latitude = null,
     longitude = null,
     dynamicDetails = {},
-    dynamicLabels = {},
+    dynamicLabels = [],
     declarationTruth = false,
     audioPath = null,
     attachments = [],
@@ -191,7 +191,8 @@ export async function createGrievance(input) {
 
   if (errors.length > 0) throw new ValidationError(errors);
 
-  const known = pickKnownKeys(divisionId, dynamicDetails, Object.keys(dynamicLabels || {}));
+  const askedKeys = Array.isArray(dynamicLabels) ? dynamicLabels.map((q) => q.key) : [];
+  const known = pickKnownKeys(divisionId, dynamicDetails, askedKeys);
   const { details, masked } = maskSensitiveValues(divisionId, known);
 
   const resolvedState = pincode ? stateForPincode(pincode) : null;
@@ -244,7 +245,7 @@ export async function createGrievance(input) {
         latitude,
         longitude,
         JSON.stringify(details),
-        JSON.stringify(dynamicLabels || {}),
+        JSON.stringify(Array.isArray(dynamicLabels) ? dynamicLabels : []),
         true,
         String(env.sla.days),
       ],

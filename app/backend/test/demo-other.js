@@ -138,11 +138,13 @@ async function main() {
       [done.data.reference])).rows[0];
     console.log('  subject   :', g.subject);
     console.log('\n  stored, as an officer would read it:');
-    const order = Object.keys(g.dynamic_labels || {});
+    const asked = Array.isArray(g.dynamic_labels) ? g.dynamic_labels : [];
+    const order = asked.map((q) => q.key);
+    const labelOf = new Map(asked.map((q) => [q.key, q.label]));
     const entries = Object.entries(g.dynamic_details || {})
       .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
     for (const [k, v] of entries) {
-      console.log(`    ${g.dynamic_labels?.[k] || k}`);
+      console.log(`    ${labelOf.get(k) || k}`);
       console.log(`      -> ${v}`);
     }
   }

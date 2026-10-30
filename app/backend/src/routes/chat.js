@@ -237,9 +237,15 @@ chatRouter.post('/:id/submit', async (req, res, next) => {
       latitude: d.latitude,
       longitude: d.longitude,
       dynamicDetails: d.details,
-      // For an unlisted complaint the questions were written for it, so they
-      // travel with the answers or the record cannot be read back.
-      dynamicLabels: Object.fromEntries((d.otherQuestions || []).map((q) => [q.key, q.label])),
+      /*
+       * For an unlisted complaint the questions were written for it, so they
+       * travel with the answers or the record cannot be read back.
+       *
+       * An ARRAY, not an object: JSONB normalises key order, so an object
+       * loses the sequence the citizen was actually asked in and the record
+       * reads as a jumble.
+       */
+      dynamicLabels: (d.otherQuestions || []).map((q) => ({ key: q.key, label: q.label })),
       declarationTruth: d.declarationTruth,
       audioPath: d.audioPath || null,
       attachments: d.attachments || [],

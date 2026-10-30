@@ -683,9 +683,14 @@ async function runUnlistedComplaint() {
   check('it is stored against the catch-all', g?.division_id === 'other', g?.division_id);
   check('the answers are kept', Object.keys(g?.dynamic_details || {}).length >= 2,
     JSON.stringify(g?.dynamic_details).slice(0, 110));
-  check('the questions are kept beside them',
-    Object.keys(g?.dynamic_labels || {}).length === Object.keys(g?.dynamic_details || {}).length,
-    JSON.stringify(g?.dynamic_labels).slice(0, 110));
+  const asked = Array.isArray(g?.dynamic_labels) ? g.dynamic_labels : [];
+  check('the questions are kept beside them, in order',
+    asked.length === Object.keys(g?.dynamic_details || {}).length
+      && asked.every((q) => q.key && q.label),
+    JSON.stringify(asked).slice(0, 120));
+  // JSONB reorders an object's keys, so the sequence only survives as an array.
+  check('the asked order survives storage', Array.isArray(g?.dynamic_labels),
+    typeof g?.dynamic_labels);
 
   await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
 }
