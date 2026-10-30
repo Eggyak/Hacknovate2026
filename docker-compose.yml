@@ -46,6 +46,11 @@ services:
       AZURE_SPEECH_ENDPOINT: ${AZURE_SPEECH_ENDPOINT}
       AZURE_TRANSLATOR_KEY: ${AZURE_TRANSLATOR_KEY:-}
       AZURE_TRANSLATOR_REGION: ${AZURE_TRANSLATOR_REGION:-}
+      # Reached by container name on the shared network, never through the
+      # department's public hostname - that would leave the cluster and come
+      # back in for no reason.
+      GOVT_API_URL: ${GOVT_API_URL:-http://mha-govt:8130}
+      MHA_INTAKE_SERVICE_KEY: ${MHA_INTAKE_SERVICE_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       MISTRAL_MODEL: ${MISTRAL_MODEL:-ministral-14b-latest}
       N8N_OTP_WEBHOOK_URL: ${N8N_OTP_WEBHOOK_URL:-}
