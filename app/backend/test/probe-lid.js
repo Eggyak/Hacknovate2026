@@ -16,7 +16,7 @@ import sdk from 'microsoft-cognitiveservices-speech-sdk';
 import { env } from '../src/lib/env.js';
 import { LANGUAGES } from '../src/data/languages.js';
 
-const TIMEOUT_MS = 12_000;
+const TIMEOUT_MS = 9_000;
 
 function probe(locale) {
   return new Promise((resolve) => {
@@ -51,18 +51,26 @@ function probe(locale) {
       }
     };
 
-    recognizer.sessionStarted = () => done({ ok: true, note: 'session opened' });
+    /*
+     * Deliberately NOT resolving on sessionStarted.
+     *
+     * That event fires when the socket connects, BEFORE the service has
+     * validated the candidate list. Treating it as success made every locale
+     * look supported while the browser was plainly being refused - the
+     * refusal arrives a moment later, as a cancellation. Only `canceled` and
+     * the timeout decide anything here.
+     */
 
     recognizer.startContinuousRecognitionAsync(
       () => {
-        // Silence is enough; the refusal arrives on connect.
-        push.write(new ArrayBuffer(3200));
-        setTimeout(() => done({ ok: true, note: 'no refusal' }), 4000);
+        // Silence is enough; the refusal follows the handshake.
+        push.write(new ArrayBuffer(32_000));
       },
       (err) => done({ ok: false, reason: String(err).slice(0, 120) }),
     );
 
-    setTimeout(() => done({ ok: true, note: 'timed out without refusal' }), TIMEOUT_MS);
+    // No refusal within the window means the candidate list was accepted.
+    setTimeout(() => done({ ok: true, note: 'accepted' }), TIMEOUT_MS);
   });
 }
 
