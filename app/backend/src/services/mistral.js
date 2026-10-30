@@ -378,9 +378,12 @@ export function snapshot() {
  */
 export async function probe() {
   if (!configured()) return { ok: false, reason: 'not_configured' };
+  // Enough room to finish the object. A ceiling too low truncates the reply
+  // mid-string and reports as "unparseable", which looks like a broken model
+  // rather than a broken probe.
   const r = await chatJson(
-    [{ role: 'user', content: 'Reply with JSON: {"ok": true}' }],
-    { maxTokens: 20 },
+    [{ role: 'user', content: 'Reply with exactly this JSON and nothing else: {"ok": true}' }],
+    { maxTokens: 60 },
   );
   if (r.ok) return { ok: true, model: env.mistral.model };
   return {
