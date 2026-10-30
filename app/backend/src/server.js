@@ -13,6 +13,7 @@ import { authRouter } from './routes/auth.js';
 import { chatRouter } from './routes/chat.js';
 import { speechRouter } from './routes/speech.js';
 import { grievanceRouter } from './routes/grievances.js';
+import { i18nRouter, i18nStats } from './routes/i18n.js';
 import { probe as speechProbe } from './services/azureSpeech.js';
 import { probe as translateProbe } from './services/translate.js';
 import { snapshot as mistralSnapshot } from './services/mistral.js';
@@ -71,7 +72,7 @@ app.get('/api/health', async (_req, res) => {
     service: 'mha-samadhan',
     version: '1.0.0',
     time: new Date().toISOString(),
-    dependencies: { database: { ok: db }, speech, translation, llm },
+    dependencies: { database: { ok: db }, speech, translation, llm, interface: i18nStats() },
     capabilities: capabilities(),
     counts: { languages: LANGUAGES.length, divisions: DIVISIONS.length },
     sla: { days: env.sla.days },
@@ -82,6 +83,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/speech', speechRouter);
 app.use('/api/grievances', grievanceRouter);
+app.use('/api/i18n', i18nRouter);
 
 app.use(
   express.static(FRONTEND, {

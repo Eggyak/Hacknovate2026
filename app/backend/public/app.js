@@ -105,6 +105,165 @@ function toast(message, kind = 'info') {
   setTimeout(() => el.remove(), 5200);
 }
 
+/**
+ * Interface translation.
+ *
+ * The portal is authored in English and translated into the citizen's chosen
+ * language by walking the rendered DOM, collecting the text, and asking the
+ * server for all of it in one request.
+ *
+ * Why the DOM rather than a message catalogue: this portal is one screen of
+ * markup away from changing, and a catalogue drifts the moment someone edits
+ * a label without updating fourteen files. Walking what was actually rendered
+ * cannot drift - whatever is on screen is what gets translated.
+ *
+ * Three rules keep it from mangling the page:
+ *
+ *   - Only English-looking text is sent. A Hindi subtitle already in the
+ *     markup, a docket number, a PIN, an email address and a currency figure
+ *     are all left exactly as they are.
+ *   - Anything inside [data-no-i18n] is skipped, which covers the masthead
+ *     wordmark, the citizen's own words, and anything monospaced.
+ *   - Translation runs on freshly rendered English, never on its own output,
+ *     so text cannot be translated twice into nonsense.
+ */
+
+const I18N_SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'CODE', 'PRE', 'TEXTAREA', 'OPTION']);
+const I18N_ATTRS = ['placeholder', 'title', 'aria-label'];
+
+const i18n = {
+  lang: 'en',
+  dict: {},          // English -> translated, for the active language
+  pending: false,
+
+  load(lang) {
+    this.lang = lang;
+    this.dict = {};
+    if (lang === 'en') return;
+    try {
+      const raw = localStorage.getItem(`mha_i18n_${lang}`);
+      if (raw) this.dict = JSON.parse(raw);
+    } catch { /* private window, or corrupt - we simply refetch */ }
+  },
+
+  save() {
+    if (this.lang === 'en') return;
+    try {
+      localStorage.setItem(`mha_i18n_${this.lang}`, JSON.stringify(this.dict));
+    } catch { /* over quota or blocked; the cache is an optimisation only */ }
+  },
+
+  /**
+   * Worth translating?
+   *
+   * Text with no Latin letters is already in a script we did not author, so
+   * it is either the citizen's own words or a deliberate bilingual label -
+   * both must survive untouched. Numbers, reference ids and addresses carry
+   * no language at all.
+   */
+  translatable(text) {
+    const s = text.trim();
+    if (s.length < 2 || s.length > 400) return false;
+    if (!/[A-Za-z]/.test(s)) return false;          // no Latin: not ours
+    if (!/[A-Za-z]{2,}/.test(s)) return false;      // stray initials only
+    if (/^MHA-GRV-/.test(s)) return false;          // docket numbers
+    if (/^[\w.+-]+@[\w.-]+$/.test(s)) return false; // email addresses
+    if (/^\+?\d[\d\s-]{5,}$/.test(s)) return false; // phone numbers
+    return true;
+  },
+
+  /** Collect every translatable string currently on screen. */
+  collect(root = document.body) {
+    const found = new Set();
+    const nodes = [];
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (I18N_SKIP_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
+        if (parent.closest('[data-no-i18n]')) return NodeFilter.FILTER_REJECT;
+        return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      },
+    });
+
+    let node = walker.nextNode();
+    while (node) {
+      const text = node.nodeValue.trim();
+      if (this.translatable(text)) {
+        found.add(text);
+        nodes.push({ node, text, attr: null });
+      }
+      node = walker.nextNode();
+    }
+
+    for (const el of root.querySelectorAll('[placeholder],[title],[aria-label]')) {
+      if (el.closest('[data-no-i18n]')) continue;
+      for (const attr of I18N_ATTRS) {
+        const value = el.getAttribute(attr);
+        if (value && this.translatable(value)) {
+          found.add(value.trim());
+          nodes.push({ node: el, text: value.trim(), attr });
+        }
+      }
+    }
+
+    return { strings: [...found], nodes };
+  },
+
+  /** Put the dictionary onto the collected nodes. */
+  paint(nodes) {
+    for (const { node, text, attr } of nodes) {
+      const hit = this.dict[text];
+      if (!hit) continue;
+      if (attr) node.setAttribute(attr, hit);
+      else node.nodeValue = node.nodeValue.replace(text, hit);
+    }
+  },
+
+  /**
+   * Translate whatever is on screen now.
+   *
+   * Paints from cache first so a language already seen appears instantly,
+   * then fetches only the strings it has never seen and paints again.
+   */
+  async apply(root = document.body) {
+    if (this.lang === 'en') return;
+
+    const { strings, nodes } = this.collect(root);
+    if (strings.length === 0) return;
+
+    this.paint(nodes);
+
+    const missing = strings.filter((s) => !(s in this.dict));
+    if (missing.length === 0 || this.pending) return;
+
+    this.pending = true;
+    try {
+      const r = await api.post('/i18n', { to: this.lang, texts: missing });
+      Object.assign(this.dict, r.translations || {});
+      // Remember the misses too, so an untranslatable string is not asked for
+      // on every single render.
+      for (const s of missing) if (!(s in this.dict)) this.dict[s] = '';
+      this.save();
+      this.paint(nodes);
+    } catch (err) {
+      if (err.status === 503) {
+        toast('Interface translation is not available on this server.', 'warn');
+        this.lang = 'en';
+      }
+    } finally {
+      this.pending = false;
+    }
+  },
+};
+
+/** Translate the current screen. Safe to call after any render. */
+function localise() {
+  if (i18n.lang === 'en') return;
+  i18n.apply().catch(() => { /* English is a working fallback */ });
+}
+
 /* ---------- speech ---------- */
 
 /**
@@ -310,14 +469,23 @@ function renderChrome() {
   $('#portalLang').onchange = async (e) => {
     const code = e.target.value;
     try { localStorage.setItem('mha_lang', code); } catch { /* private window */ }
+
     const lang = state.languages.find((l) => l.code === code);
+    document.documentElement.lang = code;
     document.documentElement.setAttribute('dir', lang?.dir || 'ltr');
+
     if (state.citizen) {
-      await api.patch('/auth/profile', { preferredLanguage: code });
+      api.patch('/auth/profile', { preferredLanguage: code }).catch(() => {});
       state.citizen.preferred_language = code;
-      toast(`Portal language set to ${lang?.name}.`, 'good');
     }
+
+    // Re-render from the English source, then translate. Translating the
+    // previous language's output would compound errors with every switch.
+    i18n.load(code);
+    await route();
   };
+
+  localise();
 
   const out = $('#signout');
   if (out) {
@@ -377,6 +545,7 @@ const view = $('#view');
 function setView(html) {
   view.innerHTML = html;
   window.scrollTo(0, 0);
+  localise();
 }
 
 /**
@@ -908,7 +1077,7 @@ async function viewDashboard() {
           <tbody>
             ${recent.map((g) => `
               <tr class="row" data-ref="${esc(g.reference_id)}">
-                <td><span class="ref">${esc(g.reference_id)}</span></td>
+                <td><span class="ref" data-no-i18n>${esc(g.reference_id)}</span></td>
                 <td>${esc(g.division?.name || '—')}</td>
                 <td>${statusBadge(g.status)}</td>
                 <td class="num small ${g.sla.breached ? '' : 'muted'}" ${g.sla.breached ? 'style="color:var(--danger);font-weight:700"' : ''}>
@@ -945,7 +1114,7 @@ async function viewChat() {
     <div class="grid" style="grid-template-columns:minmax(0,1.65fr) minmax(0,1fr)">
       <div class="card" style="padding:0;overflow:hidden">
         <div class="chat">
-          <div class="stream" id="stream"></div>
+          <div class="stream" id="stream" data-no-i18n></div>
           <div class="chips" id="chips"></div>
           <form class="composer" id="composer">
             <textarea id="say" rows="1" placeholder="Type here, or press the microphone"
@@ -1483,7 +1652,7 @@ async function viewList() {
           <tbody>
             ${grievances.map((g) => `
               <tr class="row" data-ref="${esc(g.reference_id)}">
-                <td><span class="ref">${esc(g.reference_id)}</span>
+                <td><span class="ref" data-no-i18n>${esc(g.reference_id)}</span>
                   ${g.priority === 'high' ? '<span class="badge urgent mt-2">Urgent</span>' : ''}</td>
                 <td>${esc(g.division?.name || '—')}</td>
                 <td class="num small muted">${fmtDate(g.submitted_at)}</td>
@@ -1523,7 +1692,7 @@ async function viewDetail(reference) {
     <a class="small muted" href="#/grievances">&larr; My grievances</a>
     <div class="row between wrap mt-3 mb-4">
       <div>
-        <div class="row" style="gap:8px"><span class="ref">${esc(g.reference_id)}</span>${statusBadge(g.status)}
+        <div class="row" style="gap:8px"><span class="ref" data-no-i18n>${esc(g.reference_id)}</span>${statusBadge(g.status)}
           ${g.priority === 'high' ? '<span class="badge urgent">Urgent</span>' : ''}</div>
         <h1 class="mt-2">${esc(g.division?.name || 'Grievance')}</h1>
       </div>
@@ -1541,10 +1710,10 @@ async function viewDetail(reference) {
       <div>
         <div class="card mb-4">
           <h3 class="mb-3">Your complaint</h3>
-          <p dir="${langOf(g.detected_language)?.dir || 'ltr'}" style="white-space:pre-wrap">${esc(g.original_text)}</p>
+          <p dir="${langOf(g.detected_language)?.dir || 'ltr'}" style="white-space:pre-wrap" data-no-i18n>${esc(g.original_text)}</p>
           ${g.translated_text ? `
             <details class="mt-3"><summary class="small muted" style="cursor:pointer">English rendering</summary>
-              <p class="small mt-2" style="white-space:pre-wrap">${esc(g.translated_text)}</p>
+              <p class="small mt-2" style="white-space:pre-wrap" data-no-i18n>${esc(g.translated_text)}</p>
               <p class="small muted">via ${esc(g.translation_provider || 'unknown')}</p>
             </details>` : `
             <p class="small muted mt-3">Filed in ${esc(langOf(g.detected_language)?.name || g.detected_language || 'an unrecorded language')}. No English rendering was produced.</p>`}
@@ -1630,7 +1799,7 @@ function viewTrack() {
       out.innerHTML = `
         <div class="card">
           <div class="row between wrap mb-3">
-            <span class="ref">${esc(g.reference_id)}</span>${statusBadge(g.status)}
+            <span class="ref" data-no-i18n>${esc(g.reference_id)}</span>${statusBadge(g.status)}
           </div>
           <p class="small muted" style="margin:0">${esc(g.division?.name || '')}</p>
           <div class="notice ${g.sla.breached ? 'bad' : 'info'} mt-3">
@@ -1790,6 +1959,15 @@ async function boot() {
     auth.genders = genders.genders;
     renderCapabilities();
     wireTextSize();
+
+    let saved = 'en';
+    try { saved = localStorage.getItem('mha_lang') || 'en'; } catch { /* ignore */ }
+    const savedLang = langs.languages.find((l) => l.code === saved);
+    if (savedLang) {
+      document.documentElement.lang = savedLang.code;
+      document.documentElement.setAttribute('dir', savedLang.dir || 'ltr');
+      i18n.load(savedLang.code);
+    }
   } catch {
     setView('<div class="notice bad">The service is not reachable. Please try again shortly.</div>');
     return;

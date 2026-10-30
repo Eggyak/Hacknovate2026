@@ -465,6 +465,44 @@ async function runTranslation() {
   check('division names are localised', /[਀-੿]/.test(localised), localised);
 }
 
+/** Interface translation: the portal's own chrome, in the chosen language. */
+async function runInterfaceTranslation() {
+  console.log('\n--- interface translation ---');
+  const { citizen, token } = await makeCitizen('9000000041');
+  const api = client(token);
+
+  const texts = ['Dashboard', 'Register a grievance', 'Track', 'My grievances',
+    'Mobile number', 'Full name', 'Sign in', 'Continue with mobile OTP'];
+
+  const pa = await api('/i18n', { method: 'POST', body: { to: 'pa', texts } });
+  check('interface translates into Punjabi', pa.status === 200, `HTTP ${pa.status}`);
+
+  const got = pa.data.translations || {};
+  const translated = texts.filter((t) => got[t] && /[਀-੿]/.test(got[t]));
+  check(`all ${texts.length} chrome strings come back in Gurmukhi`,
+    translated.length === texts.length,
+    `${translated.length}/${texts.length} — e.g. Dashboard -> ${got.Dashboard}`);
+
+  // The second request for the same strings must be free.
+  const again = await api('/i18n', { method: 'POST', body: { to: 'pa', texts } });
+  check('repeat requests are served from cache',
+    again.data.fetched === 0 && again.data.cached === texts.length,
+    `cached ${again.data.cached}, fetched ${again.data.fetched}`);
+
+  const ta = await api('/i18n', { method: 'POST', body: { to: 'ta', texts: ['Dashboard'] } });
+  check('a second language works independently',
+    /[஀-௿]/.test(ta.data.translations?.Dashboard || ''),
+    ta.data.translations?.Dashboard);
+
+  const bad = await api('/i18n', { method: 'POST', body: { to: 'zz', texts } });
+  check('an unsupported language is refused', bad.status === 400, `HTTP ${bad.status}`);
+
+  const en = await api('/i18n', { method: 'POST', body: { to: 'en', texts } });
+  check('English is a no-op', en.status === 200 && Object.keys(en.data.translations).length === 0);
+
+  await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
+}
+
 async function main() {
   console.log(`Testing ${BASE}`);
   try {
@@ -476,6 +514,7 @@ async function main() {
     await runAuthFlow();
     await runLanguageFollowing();
     await runTranslation();
+    await runInterfaceTranslation();
   } catch (err) {
     console.error('\nUNCAUGHT', err);
     failed += 1;
