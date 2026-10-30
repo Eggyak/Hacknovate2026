@@ -243,6 +243,40 @@ async function runSpeech() {
   await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
 }
 
+async function runAudioCapture() {
+  console.log('\n--- narrative audio capture ---');
+  const { citizen, token } = await makeCitizen('9000000007');
+  const api = client(token);
+
+  const start = await api('/chat/start', { method: 'POST', body: {} });
+  const id = start.data.conversationId;
+
+  const form = new FormData();
+  form.append('audio', new Blob([Buffer.alloc(4096, 7)], { type: 'audio/webm' }), 'narrative.webm');
+  const up = await fetch(`${BASE}/api/grievances/conversation/${id}/audio`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const upData = await up.json().catch(() => ({}));
+  check('recording accepted', up.status === 200, `HTTP ${up.status} ${JSON.stringify(upData)}`);
+
+  const conv = await api(`/chat/${id}`);
+  check('audio path recorded on the draft', Boolean(conv.data.draft?.audioPath),
+    conv.data.draft?.audioPath);
+
+  const badForm = new FormData();
+  badForm.append('audio', new Blob(['not audio'], { type: 'text/plain' }), 'a.txt');
+  const bad = await fetch(`${BASE}/api/grievances/conversation/${id}/audio`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: badForm,
+  });
+  check('a non-audio upload is refused', bad.status === 415, `HTTP ${bad.status}`);
+
+  await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
+}
+
 async function main() {
   console.log(`Testing ${BASE}`);
   try {
@@ -250,6 +284,7 @@ async function main() {
     await runDisasterTamil();
     await runValidation();
     await runSpeech();
+    await runAudioCapture();
   } catch (err) {
     console.error('\nUNCAUGHT', err);
     failed += 1;
