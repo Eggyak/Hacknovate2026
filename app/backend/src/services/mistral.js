@@ -250,6 +250,92 @@ export async function translateToEnglish(text, fromLanguageName) {
   return { ok: true, text: english, model: env.mistral.model };
 }
 
+/**
+ * Pull the division's required details out of what the citizen already said.
+ *
+ * A citizen who says "fifty thousand rupees went from my account on the 28th
+ * via UPI" has already answered three of the form's questions, and asking
+ * again is the kind of friction this portal exists to remove.
+ *
+ * Two rules make this safe to put near a legal record:
+ *
+ *   - extraction only ever SUGGESTS. Nothing here is written to a grievance
+ *     without the citizen seeing it in the field and accepting it. A model's
+ *     guess at a transaction ID is a prompt, not evidence.
+ *   - a suggestion that fails the field's own validation is dropped rather
+ *     than shown, so a plausible-looking but malformed UTR never gets in
+ *     front of someone who might accept it without reading.
+ */
+export async function extractFields(division, { original, translated }) {
+  const fields = (division?.fields || []).filter((f) => f.type !== 'select' || f.options);
+  if (fields.length === 0) return { ok: false, reason: 'no_fields' };
+
+  const spec = fields.map((f) => {
+    const bits = [`- ${f.key} (${f.type}): ${f.label}`];
+    if (f.help) bits.push(`  hint: ${f.help}`);
+    if (f.options) bits.push(`  must be one of: ${f.options.join(' | ')}`);
+    return bits.join('\n');
+  }).join('\n');
+
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'You extract structured details from a citizen grievance for an official form. '
+        + 'Return ONLY values the citizen actually stated. If a value was not stated, omit the key '
+        + 'entirely. Never guess, never infer, never fill a plausible placeholder. '
+        + 'Amounts must be digits only, with no currency symbol or separators. '
+        + 'Dates must be YYYY-MM-DD, and date-times YYYY-MM-DD HH:MM.\n\n'
+        + `Fields:\n${spec}\n\n`
+        + 'Reply with JSON only: {"fields": {"<key>": "<value>"}}. '
+        + 'An empty object is the correct answer when nothing was stated.',
+    },
+    {
+      role: 'user',
+      content:
+        `Complaint (original): ${String(original || '').slice(0, 2000)}\n`
+        + (translated ? `Complaint (English): ${String(translated).slice(0, 2000)}` : ''),
+    },
+  ];
+
+  const r = await chatJson(messages, { maxTokens: 500 });
+  if (!r.ok) return { ok: false, reason: r.reason, detail: r.detail };
+
+  const raw = r.data.fields && typeof r.data.fields === 'object' ? r.data.fields : {};
+  const suggestions = {};
+  const rejected = [];
+
+  for (const field of fields) {
+    const value = raw[field.key];
+    if (value === undefined || value === null || String(value).trim() === '') continue;
+
+    const str = String(value).trim();
+
+    // The field's own rules decide, exactly as they would for typed input.
+    if (field.pattern && !new RegExp(field.pattern).test(str.replace(/\s/g, ''))) {
+      rejected.push(field.key);
+      continue;
+    }
+    if (field.options && !field.options.includes(str)) {
+      rejected.push(field.key);
+      continue;
+    }
+    if (field.type === 'currency') {
+      const n = Number(str.replace(/[^0-9.]/g, ''));
+      if (!Number.isFinite(n) || n <= 0) {
+        rejected.push(field.key);
+        continue;
+      }
+      suggestions[field.key] = String(n);
+      continue;
+    }
+
+    suggestions[field.key] = str.slice(0, 500);
+  }
+
+  return { ok: true, suggestions, rejected, model: env.mistral.model };
+}
+
 /** A short English subject line for the docket list. */
 export async function summarise(text, translated) {
   const messages = [

@@ -48,6 +48,7 @@ function emptyDraft() {
     language: null,
     classification: null,
     details: {},
+    suggestions: {},
     pincode: null,
     state: null,
     district: null,
@@ -163,10 +164,18 @@ export function prompt(conversation, citizen) {
 
     case 'details': {
       const field = pendingField(draft);
+      const suggestion = draft.suggestions?.[field.key] || null;
       return {
         step,
         text: t('ask_field', language, { label: field.label }),
-        input: { kind: 'field', field },
+        input: {
+          kind: 'field',
+          field,
+          // Drawn from the citizen's own words. The UI must show it as
+          // something to check, not as an answer already given.
+          suggestion,
+          suggestionSource: suggestion ? 'extracted-from-your-complaint' : null,
+        },
       };
     }
 
@@ -448,6 +457,26 @@ export async function setDivision(conversation, citizen, divisionId) {
       method: 'citizen-selected',
       matched: [],
     };
+  }
+
+  // With the division known, re-read the narrative for answers the citizen has
+  // already given. These are suggestions the citizen sees and accepts in the
+  // field - never values written straight into the record.
+  if (mistral.configured() && draft.originalText) {
+    const extracted = await mistral.extractFields(division, {
+      original: draft.originalText,
+      translated: draft.translatedText,
+    });
+    if (extracted.ok) {
+      draft.suggestions = extracted.suggestions;
+      draft.extraction = {
+        model: extracted.model,
+        suggested: Object.keys(extracted.suggestions),
+        rejected: extracted.rejected,
+      };
+    } else {
+      draft.extraction = { ran: false, reason: extracted.reason };
+    }
   }
 
   const updated = { ...conversation, draft, step: nextStep(draft, citizen) };

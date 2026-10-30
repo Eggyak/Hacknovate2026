@@ -945,10 +945,29 @@ function renderAffordance(r) {
     return;
   }
 
-  if (kind === 'field' && r.bot.input.field?.type === 'select') {
-    chips.innerHTML = r.bot.input.field.options
-      .map((o) => `<button class="chip" data-v="${esc(o)}">${esc(o)}</button>`).join('');
-    $$('[data-v]', chips).forEach((b) => { b.onclick = () => sendMessage(b.dataset.v, 'text'); });
+  if (kind === 'field') {
+    const field = r.bot.input.field;
+    const suggestion = r.bot.input.suggestion;
+
+    // A value lifted from the citizen's own words. Offered for them to check
+    // and send, never silently entered - a model's reading of a transaction
+    // number is a prompt, not evidence.
+    if (suggestion) {
+      chips.innerHTML = `
+        <span class="small muted" style="width:100%;margin-bottom:-4px">
+          From what you told me — check it is right:</span>
+        <button class="chip on" data-use>${esc(suggestion)}</button>
+        <button class="chip" data-type>Type it myself</button>`;
+      $('[data-use]', chips).onclick = () => sendMessage(suggestion, 'text');
+      $('[data-type]', chips).onclick = () => { chips.innerHTML = ''; $('#say').focus(); };
+      return;
+    }
+
+    if (field?.type === 'select') {
+      chips.innerHTML = field.options
+        .map((o) => `<button class="chip" data-v="${esc(o)}">${esc(o)}</button>`).join('');
+      $$('[data-v]', chips).forEach((b) => { b.onclick = () => sendMessage(b.dataset.v, 'text'); });
+    }
     return;
   }
 
@@ -994,6 +1013,23 @@ function renderDivisionList(suggested) {
 async function chooseDivision(divisionId) {
   const r = await api.post(`/chat/${state.conversation.conversationId}/division`, { divisionId });
   state.conversation = r;
+
+  // Append rather than replace: the routing trace above it is still the
+  // answer to "how did this get here", and wiping it would lose that.
+  if (r.draft?.extraction) {
+    state.lastPipeline = {
+      steps: [
+        ...(state.lastPipeline?.steps || []),
+        {
+          stage: 'field-extraction',
+          provider: `mistral:${r.draft.extraction.model || 'n/a'}`,
+          detail: r.draft.extraction,
+        },
+      ],
+    };
+    renderTrace(state.lastPipeline);
+  }
+
   pushBot(r.bot.text, r.language);
   renderAffordance(r);
   renderProgress(r);
@@ -1137,6 +1173,14 @@ function renderTrace(pipeline) {
               ? 'agrees with the keyword result'
               : `keyword result was <code>${esc(d.lexiconSaid || 'none')}</code>`}</div>`;
         }
+      } else if (s.stage === 'field-extraction') {
+        body = d.ran === false
+          ? `<div class="ev">Not run — <code>${esc(d.reason || 'unavailable')}</code>.</div>`
+          : `<div class="ev">Pre-filled ${(d.suggested || []).length} field(s) from the complaint:
+              ${(d.suggested || []).map((k) => `<code>${esc(k)}</code>`).join(' ') || 'none'}</div>
+             ${(d.rejected || []).length
+                ? `<div class="ev">· ${d.rejected.length} suggestion(s) failed the field's own validation and were discarded</div>`
+                : ''}`;
       } else if (s.stage === 'location-resolution') {
         body = `<div class="ev">PIN ${esc(d.pincode)} resolved to <b>${esc(d.state || 'unknown')}</b>.</div>`;
       }

@@ -56,7 +56,7 @@ export const env = {
     // Free Mistral accounts meter quota PER MODEL, and a model can sit at zero
     // while another on the same key works fine. Keep this configurable so a
     // dead model is an env change, not a redeploy of code.
-    model: str('MISTRAL_MODEL', 'ministral-8b-latest'),
+    model: str('MISTRAL_MODEL', 'mistral-large-latest'),
     timeoutMs: num('MISTRAL_TIMEOUT_MS', 20_000),
   },
 
