@@ -5,12 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "node server/index.js",
+    "start:local": "concurrently -k -n API,WEB -c blue,green \"npm:server\" \"npm:dev -- --host 127.0.0.1\"",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@vitejs/plugin-react": "latest",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.2",
+    "helmet": "^8.3.0",
     "lucide-react": "^0.468.0",
     "react": "latest",
     "react-dom": "latest",
@@ -19,7 +26,9 @@
     "vite": "latest"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0"
+    "@types/react-dom": "^19.3.0",
+    "concurrently": "^10.0.6"
   }
 }

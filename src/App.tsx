@@ -1,113 +1,2276 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, ArrowDownUp, ArrowRight, AudioLines, Bell, Check, CheckCircle2, ChevronDown, Clock3, FileAudio, FileText, Filter, Globe2, Headphones, LayoutDashboard, LifeBuoy, LockKeyhole, MapPin, Menu, MessageSquareText, Mic2, MoreHorizontal, Paperclip, Plus, Search, Send, Shield, ShieldAlert, ShieldCheck, SlidersHorizontal, Sparkles, UserCog, Users, X } from 'lucide-react';
-import type { Permission, Role, Ticket, TicketStatus, User } from './types/grievance';
-import { roles as initialRoles, tickets as initialTickets, users as initialUsers, wards } from './data/mockData';
+import React, { useEffect, useMemo, useState } from 'react';
+import type { Permission, Role, Ticket, TicketStatus, User, Ward } from './types/grievance';
+import { roles as initialRoles, tickets as initialTickets, wards as initialWards } from './data/mockData';
 
-type ModalKind = 'role' | 'user' | null;
-const roleKey = 'mha-demo-roles'; const userKey = 'mha-demo-users'; const ticketKey = 'mha-demo-tickets'; const activeKey = 'mha-demo-active-user';
-function persisted<T>(key: string, fallback: T): T { try { const value = localStorage.getItem(key); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; } }
-function save(key: string, value: unknown) { localStorage.setItem(key, JSON.stringify(value)); }
-function friendlyStatus(status: TicketStatus) { return status === 'PENDING' ? 'Pending' : status === 'UNDER_INVESTIGATION' ? 'In progress' : 'Resolved'; }
-function categoryLabel(category: Ticket['category']) { return ({ CYBERCRIME: 'Cybercrime', IMMIGRATION: 'Immigration', DISASTER_RELIEF: 'Disaster relief', UT_ADMIN: 'UT administration', FREEDOM_FIGHTERS_REHABILITATION: 'Freedom fighters', CAPF_MISCONDUCT: 'CAPF conduct', FCRA_NGO: 'NGO / FCRA', INTERNAL_SECURITY: 'Internal security', COUNTER_TERRORISM: 'Counter terrorism', LWE_NORTH_EAST: 'LWE / North East', BORDER_MANAGEMENT: 'Border management', JUDICIAL: 'Judicial', POLICE: 'Police', CENTRE_STATE: 'Centre–State', INTERNAL_DIVISIONS: 'Internal divisions' } as const)[category]; }
-function App() {
-  const [roles, setRoles] = useState<Role[]>(() => persisted(roleKey, initialRoles));
-  const [users, setUsers] = useState<User[]>(() => persisted(userKey, initialUsers));
-  const [tickets, setTickets] = useState<Ticket[]>(() => persisted(ticketKey, initialTickets));
-  const [activeId, setActiveId] = useState(() => persisted(activeKey, initialUsers[0].id));
-  const [query, setQuery] = useState(''); const [statusFilter, setStatusFilter] = useState('ALL'); const [divisionFilter, setDivisionFilter] = useState('ALL');
-  const [fontScale, setFontScale] = useState<number>(() => Math.min(1.25, Math.max(1, persisted('mha-demo-font-scale', 1))));
-  const [selectedId, setSelectedId] = useState<string | null>(null); const [modal, setModal] = useState<ModalKind>(null); const [toast, setToast] = useState(''); const [sidebarOpen, setSidebarOpen] = useState(false); const [notificationOpen, setNotificationOpen] = useState(false);
-  const activeUser = users.find(user => user.id === activeId) ?? users[0]; const activeRole = roles.find(role => role.id === activeUser.roleId) ?? roles[0]; const hasRead = activeRole.permissions.includes('tickets:read');
-  const activeWards = activeRole.wardIds?.length ? activeUser.assignedWards.filter(id => activeRole.wardIds?.includes(id)) : activeUser.assignedWards;
-  useEffect(() => { save(roleKey, roles); }, [roles]); useEffect(() => { save(userKey, users); }, [users]); useEffect(() => { save(ticketKey, tickets); }, [tickets]); useEffect(() => { save(activeKey, activeId); }, [activeId]);
-  useEffect(() => { save('mha-demo-font-scale', fontScale); document.documentElement.style.setProperty('--font-scale', String(fontScale)); }, [fontScale]);
-  useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 3600); return () => window.clearTimeout(timer); }, [toast]);
-  const allowedTickets = useMemo(() => tickets.filter(ticket => {
-    if (!activeRole.permissions.includes('tickets:read')) return false;
-    if (activeRole.scopeType === 'DIVISION' && ticket.divisionId !== activeRole.divisionId) return false;
-    if (activeRole.scopeType === 'WARD' && !activeWards.includes(ticket.wardId)) return false;
-    return true;
-  }), [tickets, activeRole, activeUser]);
-  const filteredTickets = useMemo(() => allowedTickets.filter(ticket => {
-    const q = query.trim().toLowerCase(); const searchable = [ticket.grievanceId, ticket.complainantName, ticket.location.district, ticket.wardId, categoryLabel(ticket.category)].join(' ').toLowerCase();
-    return (!q || searchable.includes(q)) && (statusFilter === 'ALL' || ticket.status === statusFilter) && (divisionFilter === 'ALL' || ticket.divisionId === divisionFilter);
-  }), [allowedTickets, query, statusFilter, divisionFilter]);
-  const selected = allowedTickets.find(ticket => ticket.id === selectedId) ?? null;
-  const updateTicket = (id: string, update: Partial<Ticket>) => setTickets(current => current.map(ticket => ticket.id === id ? { ...ticket, ...update } as Ticket : ticket));
-  const submitReport = (id: string, status: TicketStatus, report: string) => { if (!activeRole.permissions.includes('tickets:resolve') && !activeRole.permissions.includes('tickets:reroute')) { setToast('Your current role cannot update tickets.'); return; } updateTicket(id, { status, actionTakenReport: report }); setToast(`Demo update saved. Native-language notification for ${selected?.detectedLanguage ?? 'the complainant'} is simulated.`); };
-  const addRole = (role: Role) => { setRoles(current => [...current, role]); setModal(null); setToast(`${role.name} created.`); };
-  const addUser = (user: User) => { setUsers(current => [...current, user]); setModal(null); setToast(`${user.name} onboarded.`); };
-  const canManage = activeRole.permissions.includes('users:manage');
+export interface ActivityEvent {
+  id: number;
+  userId: string | null;
+  ticketId: string | null;
+  grievanceId?: string;
+  actorName?: string;
+  type: string;
+  summary: string;
+  details: Record<string, unknown>;
+  createdAt: string;
+}
 
-  return <div className="app-shell" style={{ '--font-scale': String(fontScale) } as React.CSSProperties}>
-    <aside className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''}`}>
-      <div className="brand"><div className="brand-emblem"><Shield size={24} /></div><div><div className="brand-title">MHA <span>CONNECT</span></div><div className="brand-caption">DEPARTMENT WORKSPACE</div></div><button className="mobile-close icon-button" onClick={() => setSidebarOpen(false)} aria-label="Close menu"><X size={18}/></button></div>
-      <div className="sidebar-section">WORKSPACE</div>
-      <button className="nav-item active"><LayoutDashboard size={17}/>Overview<span className="nav-active-mark"/></button>
-      <button className="nav-item" onClick={() => document.getElementById('triage')?.scrollIntoView({ behavior: 'smooth' })}><MessageSquareText size={17}/>Grievance inbox<span className="nav-count">{allowedTickets.length}</span></button>
-      <button className="nav-item" onClick={() => setToast('Analytics summary is available in the overview cards.')}><Activity size={17}/>Analytics</button>
-      <button className="nav-item" onClick={() => setToast('Ward directory: ' + wards.map(ward => ward.id).join(', '))}><MapPin size={17}/>Ward directory</button>
-      <div className="sidebar-section admin-label">ADMINISTRATION</div>
-      <button className="nav-item" onClick={() => canManage ? setModal('user') : setToast('User management is available to Super Admin only.')}><Users size={17}/>User access</button>
-      <button className="nav-item" onClick={() => canManage ? setModal('role') : setToast('Role management is available to Super Admin only.')}><LockKeyhole size={17}/>Roles & permissions</button>
-      <div className="sidebar-spacer"/>
-      <div className="help-card"><div className="help-icon"><LifeBuoy size={17}/></div><div className="help-title">Need assistance?</div><div className="help-copy">Access the officer operations guide.</div><button onClick={() => setToast('Demo workspace guide: use the terminal simulator to preview each access scope.')}>Open guide <ArrowRight size={13}/></button></div>
-      <div className="sidebar-foot"><span className="live-dot"/> Secure demo environment <span className="version">v0.1</span></div>
-    </aside>
-    {sidebarOpen && <button className="sidebar-scrim" onClick={() => setSidebarOpen(false)} aria-label="Close menu"/>}
-    <main className="main-area">
-      <header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" onClick={() => setSidebarOpen(true)} aria-label="Open menu"><Menu size={19}/></button><div className="breadcrumb"><span>Workspace</span><span className="crumb-slash">/</span><strong>Overview</strong></div></div><div className="topbar-right"><div className="terminal-label"><span className="live-dot"/> SIMULATE ACTIVE TERMINAL</div><div className="font-controls" role="group" aria-label="Accessibility font size"><span className="font-control-label">TEXT</span><button className="font-step" aria-label="Decrease font size" title="Decrease font size" onClick={() => setFontScale(value => Math.max(1, Math.round((value - .05) * 100) / 100))} disabled={fontScale <= 1}>A−</button><button className="font-step font-step-large" aria-label="Increase font size" title="Increase font size" onClick={() => setFontScale(value => Math.min(1.25, Math.round((value + .05) * 100) / 100))} disabled={fontScale >= 1.25}>A+</button>{fontScale > 1 && <button className="font-reset" aria-label="Reset font size" title="Reset font size" onClick={() => setFontScale(1)}>Reset</button>}</div><label className="terminal-select"><UserCog size={15}/><select aria-label="Switch active terminal or user" value={activeId} onChange={event => { setActiveId(event.target.value); setSelectedId(null); }}>
-        {users.filter(user => user.isActive).map(user => <option key={user.id} value={user.id}>{user.name} · {roles.find(role => role.id === user.roleId)?.name ?? 'Role'}</option>)}
-      </select><ChevronDown size={14}/></label><button className="notification-button icon-button" onClick={() => setNotificationOpen(!notificationOpen)} aria-label="Notifications"><Bell size={18}/><i/></button>{notificationOpen && <div className="notification-pop"><b>Notifications</b><p><span className="live-dot"/> Demo terminal is active.</p><p><Clock3 size={13}/> SLA clock uses the seeded demo status.</p></div>}<div className="user-divider"/><div className="profile-block"><div className="avatar">{activeUser.avatarInitials}</div><div className="profile-text"><b>{activeUser.name}</b><span>{activeRole.name}</span></div></div></div></header>
-      <div className="page-content">
-        <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-dot"/> MINISTRY OF HOME AFFAIRS <span className="eyebrow-sep">/</span> OPERATIONS</div><h1>Grievance command center</h1><p>Monitor, triage and resolve citizen grievances across your jurisdiction.</p></div><div className="heading-actions"><div className="today-chip"><span className="today-dot"/> Live operations <span className="chip-divider"/> {new Intl.DateTimeFormat('en-IN',{day:'2-digit',month:'short',year:'numeric'}).format(new Date())}</div><button className="button button-primary" onClick={() => canManage ? setModal('user') : setToast('Onboarding requires Super Admin access.')}><Plus size={16}/> Onboard officer</button></div></div>
-        <section className="scope-strip"><div className="scope-icon"><ShieldCheck size={17}/></div><div><b>Access scope</b><span>{activeRole.scopeType === 'GLOBAL' ? 'National · All MHA divisions and wards' : activeRole.scopeType === 'DIVISION' ? `Division · ${activeRole.divisionId?.replaceAll('_', ' ')}` : `Ward jurisdiction · ${activeWards.join(', ') || 'No wards assigned'}`}</span></div><div className="scope-perms"><span>{activeRole.scopeType} SCOPE</span>{activeWards.map(ward => <i key={ward}>{ward.replace('WARD-', 'Ward ')}</i>)}</div><button className="scope-lock" title="Scope is applied automatically"><LockKeyhole size={15}/></button></section>
-        {!hasRead && <div className="access-empty"><LockKeyhole size={16}/><span>Your active role does not have <b>tickets:read</b> permission. Ticket metrics and queue data are hidden.</span></div>}
-        {hasRead && <section className="stats-grid">
-          <StatCard icon={<MessageSquareText size={17}/>} tone="blue" label="Total grievances" value={allowedTickets.length.toString().padStart(2,'0')} foot="Within your active scope"/>
-          <StatCard icon={<Clock3 size={17}/>} tone="amber" label="Awaiting action" value={allowedTickets.filter(t => t.status !== 'RESOLVED').length.toString().padStart(2,'0')} foot="Pending or under review"/>
-          <StatCard icon={<ShieldAlert size={17}/>} tone="red" label="SLA at risk" value={allowedTickets.filter(t => t.slaStatus !== 'ON_TIME' && t.status !== 'RESOLVED').length.toString().padStart(2,'0')} foot="Warning and overdue cases"/>
-          <StatCard icon={<CheckCircle2 size={17}/>} tone="green" label="Resolved" value={allowedTickets.filter(t => t.status === 'RESOLVED').length.toString().padStart(2,'0')} foot="Closed in active scope"/>
-        </section>}
-        <section className="content-grid">
-          <div className="queue-panel panel" id="triage"><div className="panel-heading"><div><div className="panel-kicker">CASE MANAGEMENT</div><h2>Triage queue <span className="title-count">{filteredTickets.length}</span></h2><p>Review cases requiring your attention.</p></div><button className="more-button icon-button" onClick={() => setToast('Queue refreshed with current mock data.')} aria-label="More queue actions"><MoreHorizontal size={19}/></button></div>
-            <div className="toolbar"><label className="search-box"><Search size={15}/><input placeholder="Search ID, name, ward…" value={query} onChange={e => setQuery(e.target.value)}/>{query && <button onClick={() => setQuery('')} aria-label="Clear search"><X size={13}/></button>}</label><label className="filter-select"><Filter size={14}/><select aria-label="Filter by status" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="ALL">All status</option><option value="PENDING">Pending</option><option value="UNDER_INVESTIGATION">In progress</option><option value="RESOLVED">Resolved</option></select><ChevronDown size={13}/></label><label className="filter-select division-select"><SlidersHorizontal size={14}/><select aria-label="Filter by division" value={divisionFilter} onChange={e => setDivisionFilter(e.target.value)}><option value="ALL">All divisions</option>{[...new Set(allowedTickets.map(t => t.divisionId))].map(d => <option key={d} value={d}>{d.replaceAll('_',' ')}</option>)}</select><ChevronDown size={13}/></label></div>
-            <div className="table-wrap"><table><thead><tr><th>GRIEVANCE</th><th>COMPLAINANT</th><th>WARD / DISTRICT</th><th>CATEGORY</th><th>SLA STATUS</th><th>STATUS</th><th/></tr></thead><tbody>{filteredTickets.map(ticket => <tr key={ticket.id} className={selectedId === ticket.id ? 'row-selected' : ''} onClick={() => setSelectedId(ticket.id)}><td><button className="grievance-link" onClick={e => { e.stopPropagation(); setSelectedId(ticket.id); }}>{ticket.grievanceId}<span>{formatDate(ticket.submissionTimestamp)}</span></button></td><td><div className="complainant-cell"><div className="mini-avatar">{ticket.complainantName.split(' ').map(part => part[0]).slice(0,2).join('')}</div><div><b>{ticket.complainantName}</b><span>{ticket.detectedLanguage}</span></div></div></td><td><b className="ward-name">{ticket.wardId.replace('WARD-', 'Ward ')}</b><span className="sub-cell">{ticket.location.district}</span></td><td><span className="category-pill">{categoryLabel(ticket.category)}</span></td><td><SlaBadge status={ticket.status === 'RESOLVED' ? 'ON_TIME' : ticket.slaStatus}/></td><td><span className={`status-pill status-${ticket.status.toLowerCase()}`}><i/>{friendlyStatus(ticket.status)}</span></td><td><button className="row-open" aria-label={`Open ${ticket.grievanceId}`} onClick={e => { e.stopPropagation(); setSelectedId(ticket.id); }}><ArrowRight size={15}/></button></td></tr>)}</tbody></table>{filteredTickets.length === 0 && <div className="empty-state"><Search size={24}/><b>No grievances found</b><span>Adjust the search or filter to see matching cases.</span></div>}</div>
-            <div className="table-footer"><span>Showing <b>{filteredTickets.length}</b> of <b>{allowedTickets.length}</b> scoped cases</span><button onClick={() => { setQuery(''); setStatusFilter('ALL'); setDivisionFilter('ALL'); }}>Reset filters <X size={13}/></button></div>
+interface NotificationItem {
+  id: string;
+  module: string;
+  summary: string;
+  createdAt: string;
+}
+
+type ActiveView = 'dashboard' | 'grievances' | 'users' | 'roles' | 'activity_feed' | 'audit' | 'wards';
+type ModalKind = 'role' | 'user' | 'profile' | 'settings' | 'audit-details' | null;
+
+const noAccessRole: Role = {
+  id: 'ROLE-NO-ACCESS',
+  name: 'No access',
+  description: '',
+  permissions: [],
+  scopeType: 'WARD',
+  wardIds: [],
+  isSystem: true,
+};
+
+function persisted<T>(key: string, fallback: T): T {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? (JSON.parse(value) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function save(key: string, value: unknown) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    credentials: 'same-origin',
+    headers: {
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...init.headers,
+    },
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error ?? `Request failed (${response.status}).`);
+  return result as T;
+}
+
+function friendlyStatus(status: TicketStatus) {
+  return status === 'PENDING' ? 'Pending' : status === 'UNDER_INVESTIGATION' ? 'In progress' : 'Resolved';
+}
+
+function categoryLabel(category: Ticket['category']) {
+  return (
+    ({
+      CYBERCRIME: 'Cybercrime',
+      IMMIGRATION: 'Immigration',
+      DISASTER_RELIEF: 'Disaster relief',
+      UT_ADMIN: 'UT administration',
+      FREEDOM_FIGHTERS_REHABILITATION: 'Freedom fighters',
+      CAPF_MISCONDUCT: 'CAPF conduct',
+      FCRA_NGO: 'NGO / FCRA',
+      INTERNAL_SECURITY: 'Internal security',
+      COUNTER_TERRORISM: 'Counter terrorism',
+      LWE_NORTH_EAST: 'LWE / North East',
+      BORDER_MANAGEMENT: 'Border management',
+      JUDICIAL: 'Judicial',
+      POLICE: 'Police',
+      CENTRE_STATE: 'Centre–State',
+      INTERNAL_DIVISIONS: 'Internal divisions',
+    } as const)[category] || category
+  );
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value));
+}
+
+function prettyKey(key: string) {
+  return key
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/^./, (l) => l.toUpperCase())
+    .replace('Ifsc', 'IFSC')
+    .replace('Utr', 'UTR')
+    .replace('Aadhaar', 'Aadhaar');
+}
+
+export default function App() {
+  const [roles, setRoles] = useState<Role[]>(initialRoles);
+  const [users, setUsers] = useState<User[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [wardList, setWardList] = useState(initialWards);
+  const [activities, setActivities] = useState<ActivityEvent[]>([]);
+  const [sessionUser, setSessionUser] = useState<User | null>(null);
+  const [sessionRole, setSessionRole] = useState<Role | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [needsInitialAdmin, setNeedsInitialAdmin] = useState(false);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [credentialNotice, setCredentialNotice] = useState<{ name: string; email: string; password: string } | null>(null);
+
+  // Active view navigation
+  const [activeView, setActiveView] = useState<ActiveView>('dashboard');
+  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const [modal, setModal] = useState<ModalKind>(null);
+  const [activeAuditDetail, setActiveAuditDetail] = useState<ActivityEvent | null>(null);
+  const [toast, setToast] = useState('');
+  const [showBackToTop, setShowBackToTop] = useState(false);
+
+  // Masthead menus
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [notificationMenuOpen, setNotificationMenuOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+
+  // Filters & Search
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [divisionFilter, setDivisionFilter] = useState('ALL');
+  const [auditFilter, setAuditFilter] = useState('ALL');
+
+  // Role Management State
+  const [selectedRoleId, setSelectedRoleId] = useState('');
+  const [roleName, setRoleName] = useState('');
+  const [rolePermissions, setRolePermissions] = useState<Permission[]>([]);
+
+  // Accessibility Font scale
+  const [fontScale, setFontScale] = useState<number>(() => Math.min(1.25, Math.max(1, persisted('mha-font-scale', 1))));
+
+  const isSuperAdmin = sessionUser?.roleId === 'ROLE-SUPER-ADMIN';
+  const activeRole = sessionRole ?? roles.find((r) => r.id === sessionUser?.roleId) ?? noAccessRole;
+  const activeWards = activeRole.wardIds?.length
+    ? (sessionUser?.assignedWards ?? []).filter((id) => activeRole.wardIds?.includes(id))
+    : sessionUser?.assignedWards ?? [];
+  const hasTicketRead = activeRole.permissions.includes('tickets:read');
+
+  // Scroll listener for back-to-top button
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowBackToTop(window.scrollY > 240);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Hydrate data
+  const hydrate = async () => {
+    try {
+      const data = await api<{
+        user: User;
+        role: Role;
+        tickets: Ticket[];
+        roles: Role[];
+        users: User[];
+        wards: typeof initialWards;
+        activities?: ActivityEvent[];
+      }>('/api/bootstrap');
+      setSessionUser(data.user);
+      setSessionRole(data.role);
+      setTickets(data.tickets);
+      setRoles(data.roles);
+      setUsers(data.users || []);
+      setWardList(data.wards || initialWards);
+      if (data.activities) setActivities(data.activities);
+      if (data.user.roleId === 'ROLE-SUPER-ADMIN') {
+        setActiveView('users');
+      } else {
+        setActiveView('dashboard');
+      }
+    } catch {
+      // Fallback
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([api<{ user: User; role: Role }>('/api/auth/me'), api<{ needsInitialAdmin: boolean }>('/api/auth/setup-status')])
+      .then(async ([, setup]) => {
+        if (!active) return;
+        setNeedsInitialAdmin(setup.needsInitialAdmin);
+        await hydrate();
+      })
+      .catch(async () => {
+        try {
+          const setup = await api<{ needsInitialAdmin: boolean }>('/api/auth/setup-status');
+          if (active) setNeedsInitialAdmin(setup.needsInitialAdmin);
+        } catch {}
+      })
+      .finally(() => {
+        if (active) setAuthReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    save('mha-font-scale', fontScale);
+    document.documentElement.style.setProperty('--font-scale', String(fontScale));
+  }, [fontScale]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(''), 3600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  // Sync role editor when selected role changes
+  const currentRole = roles.find((r) => r.id === selectedRoleId) ?? roles[0];
+  useEffect(() => {
+    if (currentRole) {
+      setRoleName(currentRole.name);
+      setRolePermissions(currentRole.permissions);
+    }
+  }, [selectedRoleId, roles]);
+
+  // Scoped tickets
+  const allowedTickets = useMemo(() => {
+    return tickets.filter((ticket) => {
+      if (!activeRole.permissions.includes('tickets:read')) return false;
+      if (activeRole.scopeType === 'DIVISION' && ticket.divisionId !== activeRole.divisionId) return false;
+      if (activeRole.scopeType === 'WARD' && !activeWards.includes(ticket.wardId)) return false;
+      return true;
+    });
+  }, [tickets, activeRole, activeWards]);
+
+  // Filtered tickets
+  const filteredTickets = useMemo(() => {
+    return allowedTickets.filter((ticket) => {
+      const q = query.trim().toLowerCase();
+      const searchable = [ticket.grievanceId, ticket.complainantName, ticket.location.district, ticket.wardId, categoryLabel(ticket.category)].join(' ').toLowerCase();
+      return (
+        (!q || searchable.includes(q)) &&
+        (statusFilter === 'ALL' || ticket.status === statusFilter) &&
+        (divisionFilter === 'ALL' || ticket.divisionId === divisionFilter)
+      );
+    });
+  }, [allowedTickets, query, statusFilter, divisionFilter]);
+
+  const selectedTicket = tickets.find((t) => t.id === selectedTicketId) ?? null;
+
+  // Actions
+  const signIn = async (email: string, password: string) => {
+    try {
+      const result = await api<{ user: User; role: Role; mustChangePassword: boolean }>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      });
+      if (result.mustChangePassword) {
+        setSessionUser(result.user);
+        setSessionRole(result.role);
+        setMustChangePassword(true);
+        setLoginError('');
+        return;
+      }
+      await hydrate();
+      setLoginError('');
+      setToast(`Welcome back, ${result.user.name}.`);
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : 'Could not sign in.');
+    }
+  };
+
+  const signOut = async () => {
+    try {
+      await api('/api/auth/logout', { method: 'POST' });
+    } finally {
+      setSessionUser(null);
+      setSessionRole(null);
+      setTickets([]);
+      setWardList(initialWards);
+      setSelectedTicketId(null);
+      setModal(null);
+      setAccountMenuOpen(false);
+      setNotificationMenuOpen(false);
+      setUsers([]);
+      setRoles(initialRoles);
+      setActiveView('dashboard');
+    }
+  };
+
+  const changeOwnPassword = async (currentPassword: string, newPassword: string) => {
+    try {
+      await api('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      setMustChangePassword(false);
+      setModal(null);
+      await hydrate();
+      setToast('Password updated successfully.');
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Could not update password.');
+    }
+  };
+
+  const submitReport = async (id: string, status: TicketStatus, report: string) => {
+    try {
+      const saved = await api<Ticket>(`/api/tickets/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, actionTakenReport: report }),
+      });
+      setTickets((curr) => curr.map((t) => (t.id === id ? saved : t)));
+      setToast(`Grievance ${saved.grievanceId} updated to ${friendlyStatus(status)}.`);
+      setSelectedTicketId(null);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Failed to update grievance.');
+    }
+  };
+
+  const addUser = async (user: User) => {
+    try {
+      const saved = await api<User & { temporaryPassword?: string }>('/api/users', {
+        method: 'POST',
+        body: JSON.stringify(user),
+      });
+      setUsers((curr) => [...curr, saved]);
+      setModal(null);
+      setCredentialNotice({ name: saved.name, email: saved.email, password: saved.temporaryPassword ?? '' });
+      setToast(`Account created for ${saved.name}.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Failed to create user.');
+    }
+  };
+
+  const toggleUser = async (user: User) => {
+    try {
+      const saved = await api<User>(`/api/users/${encodeURIComponent(user.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isActive: !user.isActive }),
+      });
+      setUsers((curr) => curr.map((u) => (u.id === saved.id ? saved : u)));
+      setToast(`${saved.name} is now ${saved.isActive ? 'Active' : 'Suspended'}.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Failed to toggle account.');
+    }
+  };
+
+  const resetPassword = async (user: User) => {
+    try {
+      const result = await api<{ temporaryPassword: string }>(`/api/users/${encodeURIComponent(user.id)}/reset-password`, {
+        method: 'POST',
+      });
+      setCredentialNotice({ name: user.name, email: user.email, password: result.temporaryPassword });
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Failed to reset password.');
+    }
+  };
+
+  const addRole = async (newRole: Role) => {
+    try {
+      const saved = await api<Role>('/api/roles', {
+        method: 'POST',
+        body: JSON.stringify(newRole),
+      });
+      setRoles((curr) => [...curr, saved]);
+      setSelectedRoleId(saved.id);
+      setModal(null);
+      setToast(`Role ${saved.name} created.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Failed to create role.');
+    }
+  };
+
+  const updateRole = async () => {
+    if (!currentRole || currentRole.isSystem) return;
+    try {
+      const saved = await api<Role>(`/api/roles/${encodeURIComponent(currentRole.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: roleName, description: currentRole.description, permissions: rolePermissions }),
+      });
+      setRoles((curr) => curr.map((r) => (r.id === saved.id ? saved : r)));
+      setToast(`Permissions updated for ${saved.name}.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Failed to save role permissions.');
+    }
+  };
+
+  const downloadAuditCsv = () => {
+    const headers = ['Timestamp', 'Actor', 'Event Type', 'Summary', 'Ticket ID'];
+    const rows = activities.map((a) => [
+      `"${a.createdAt}"`,
+      `"${a.actorName ?? 'System'}"`,
+      `"${a.type}"`,
+      `"${a.summary.replace(/"/g, '""')}"`,
+      `"${a.grievanceId ?? ''}"`,
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `mha-audit-log-${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setToast('Audit CSV downloaded.');
+  };
+
+  // Loading state
+  if (!authReady) {
+    return (
+      <main className="app-shell" style={{ display: 'grid', placeItems: 'center', minHeight: '100vh' }}>
+        <p className="loading" style={{ font: '500 13px DM Mono, monospace' }}>
+          Connecting to MHA Grievance service...
+        </p>
+      </main>
+    );
+  }
+
+  // Sign in screen
+  if (!sessionUser) {
+    return (
+      <SignInScreen
+        setup={needsInitialAdmin}
+        error={loginError}
+        onSignIn={signIn}
+        onClearError={() => setLoginError('')}
+        onInitialAdmin={async (payload) => {
+          try {
+            await api('/api/auth/initial-admin', { method: 'POST', body: JSON.stringify(payload) });
+            setNeedsInitialAdmin(false);
+            setLoginError('Super Admin account created. Sign in using your credentials.');
+          } catch (err) {
+            setLoginError(err instanceof Error ? err.message : 'Could not create Super Admin.');
+          }
+        }}
+      />
+    );
+  }
+
+  // Navigation Items matching library admin portal
+  const navigation: { id: ActiveView; label: string }[] = isSuperAdmin
+    ? [
+        { id: 'users', label: 'Staff accounts' },
+        { id: 'roles', label: 'Roles & permissions' },
+      ]
+    : [
+        { id: 'dashboard', label: 'Operations Dashboard' },
+        { id: 'grievances', label: 'Grievance inbox' },
+        { id: 'activity_feed', label: 'Activity feed' },
+        ...(activeRole.permissions.includes('analytics:view') ? [{ id: 'audit' as ActiveView, label: 'Audit log' }] : []),
+        { id: 'wards', label: 'Ward directory' },
+      ];
+
+  const effectiveView: ActiveView = isSuperAdmin
+    ? activeView === 'roles'
+      ? 'roles'
+      : 'users'
+    : activeView === 'users' || activeView === 'roles'
+    ? 'dashboard'
+    : activeView;
+
+  // Calculated 7-day intake activity from actual scoped tickets
+  const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const today = new Date();
+  const past7Days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - (6 - i));
+    return {
+      dateStr: d.toISOString().slice(0, 10),
+      label: dayLabels[d.getDay()],
+    };
+  });
+  const weeklyActivity = past7Days.map(({ dateStr, label }) => {
+    const count = allowedTickets.filter((t) => t.submissionTimestamp.slice(0, 10) === dateStr).length;
+    return { label, count };
+  });
+  const maxWeekly = Math.max(1, ...weeklyActivity.map((w) => w.count));
+
+  return (
+    <div className="app-shell" onClick={() => { setAccountMenuOpen(false); setNotificationMenuOpen(false); }}>
+      {/* Top Masthead - Exact Clone of Library App Admin Masthead */}
+      <header className="masthead" onClick={(e) => e.stopPropagation()}>
+        <div className="brand">
+          <div className="brand-mark">MHA</div>
+          <div>
+            <p className="brand-title">MINISTRY OF HOME AFFAIRS</p>
+            <p className="brand-subtitle">Grievance Operations &amp; Management</p>
           </div>
-          <aside className="insights-column"><section className="panel sla-panel"><div className="side-panel-heading"><div><div className="panel-kicker">SERVICE LEVEL</div><h3>SLA overview</h3></div><span className="icon-bubble"><Activity size={16}/></span></div><p className="side-description">Response health for your current jurisdiction.</p><div className="sla-chart"><div className="donut" style={{'--progress': `${allowedTickets.length ? (allowedTickets.filter(t=>t.slaStatus==='ON_TIME').length / allowedTickets.length)*100 : 0}%`} as React.CSSProperties}><div><b>{allowedTickets.length ? Math.round((allowedTickets.filter(t=>t.slaStatus==='ON_TIME').length / allowedTickets.length)*100) : 0}%</b><span>on track</span></div></div><div className="sla-legend"><div><i className="legend-dot ontime"/><span>On time</span><b>{allowedTickets.filter(t => t.slaStatus === 'ON_TIME').length}</b></div><div><i className="legend-dot warning"/><span>Warning</span><b>{allowedTickets.filter(t => t.slaStatus === 'WARNING').length}</b></div><div><i className="legend-dot overdue"/><span>Overdue</span><b>{allowedTickets.filter(t => t.slaStatus === 'OVERDUE').length}</b></div></div></div><div className="sla-foot"><span><Sparkles size={13}/> Target response within 21 days</span><button onClick={() => setToast('SLA dates and response deadlines are seeded sample data.')}>View policy <ArrowRight size={13}/></button></div></section>
-            <section className="language-panel"><div className="language-top"><div className="language-icon"><Globe2 size={18}/></div><span className="language-live">LIVE</span></div><div className="panel-kicker">VOICE FIRST ACCESS</div><h3>Every voice heard.</h3><p>Multilingual intake helps citizens raise issues in the language they know best.</p><div className="language-tags"><span>हिन्दी</span><span>தமிழ்</span><span>ಕನ್ನಡ</span><span>বাংলা</span><span>+ 8</span></div><div className="waveform">{Array.from({length:34},(_,i)=><i key={i} style={{height:`${8+((i*17+11)%25)}px`,opacity:.35+(i%4)*.16}}/>)}</div><div className="language-foot"><AudioLines size={14}/> Voice intake enabled across all channels</div></section>
-            <section className="panel activity-panel"><div className="side-panel-heading"><div><div className="panel-kicker">RECENT UPDATES</div><h3>Activity stream</h3></div><button className="text-icon-button" onClick={() => setToast('You are viewing the latest local activity.')}>View all <ArrowRight size={13}/></button></div><div className="activity-item"><div className="activity-marker marker-green"><Check size={12}/></div><div><b>Case resolved</b><span>MHA-2026-006 · OCI status request</span><small>2 hours ago <i>·</i> Meera Nair</small></div></div><div className="activity-item"><div className="activity-marker marker-blue"><FileAudio size={12}/></div><div><b>New voice complaint received</b><span>MHA-2026-001 · Cybercrime</span><small>Yesterday <i>·</i> Tamil</small></div></div><div className="activity-item"><div className="activity-marker marker-amber"><ArrowDownUp size={12}/></div><div><b>Case assigned for review</b><span>MHA-2026-002 · Immigration</span><small>3 days ago <i>·</i> Cyber Desk</small></div></div></section>
-          </aside>
-        </section>
-        <footer className="page-footer"><span>© 2026 Ministry of Home Affairs · Department workspace prototype</span><span><i className="live-dot"/> Demo data · Changes stored in this browser</span></footer>
+        </div>
+        <div className="user-block">
+          <div className="live-badge" id="live-indicator">
+            <span className="live-dot" /> Connected to service
+          </div>
+          <div className="header-account-name">{sessionUser.name}</div>
+
+          {/* Account menu toggle */}
+          <div className="account-menu">
+            <button
+              className="account-menu-toggle"
+              type="button"
+              aria-label="Open user menu"
+              aria-expanded={accountMenuOpen}
+              onClick={() => {
+                setAccountMenuOpen(!accountMenuOpen);
+                setNotificationMenuOpen(false);
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 21a8 8 0 0 0-16 0" />
+                <circle cx="12" cy="8" r="4" />
+              </svg>
+            </button>
+            <div className="account-dropdown" hidden={!accountMenuOpen}>
+              <button
+                type="button"
+                onClick={() => {
+                  setAccountMenuOpen(false);
+                  setModal('profile');
+                }}
+              >
+                Profile
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAccountMenuOpen(false);
+                  setModal('settings');
+                }}
+              >
+                Settings
+              </button>
+              <button type="button" className="account-logout" onClick={signOut}>
+                Log out
+              </button>
+            </div>
+          </div>
+
+          {/* Notification Menu */}
+          <div className="notification-menu">
+            <button
+              className={`notification-toggle ${notifications.length > 0 ? 'has-notifications' : ''}`}
+              type="button"
+              aria-label="Notifications"
+              aria-expanded={notificationMenuOpen}
+              onClick={() => {
+                setNotificationMenuOpen(!notificationMenuOpen);
+                setAccountMenuOpen(false);
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                <path d="M10 21h4" />
+              </svg>
+              {notifications.length > 0 && <span className="notification-count">{notifications.length}</span>}
+            </button>
+            <div className="notification-dropdown" hidden={!notificationMenuOpen}>
+              <div className="notification-dropdown-head">
+                <strong>Notifications</strong>
+                <span>{notifications.length} updates</span>
+              </div>
+              {notifications.length > 0 ? (
+                notifications.map((n) => (
+                  <article className="notification-item" key={n.id}>
+                    <div className="notification-item-top">
+                      <span className="status">{n.module}</span>
+                      <button
+                        type="button"
+                        aria-label="Remove"
+                        onClick={() => setNotifications((curr) => curr.filter((item) => item.id !== n.id))}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="notification-open">
+                      <span>{n.summary}</span>
+                      <span className="notification-time">{new Date(n.createdAt).toLocaleTimeString('en-IN')}</span>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <div className="notification-empty">No unread notifications.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Page Area */}
+      <main className="page">
+        <div className="page-heading">
+          <div>
+            <p className="eyebrow">{isSuperAdmin ? 'MHA / ACCESS MANAGEMENT' : 'MHA / GRIEVANCE PORTAL'}</p>
+            <h1>
+              {isSuperAdmin
+                ? 'Access management'
+                : effectiveView === 'dashboard'
+                ? 'Grievance command center'
+                : effectiveView === 'grievances'
+                ? 'Grievance triage queue'
+                : effectiveView === 'activity_feed'
+                ? 'Activity stream'
+                : effectiveView === 'audit'
+                ? 'Audit record log'
+                : 'Ward jurisdictions'}
+            </h1>
+            <p className="heading-note">
+              {isSuperAdmin
+                ? 'Manage staff users and role permissions.'
+                : `Active jurisdiction: ${activeRole.name} · ${activeRole.scopeType} scope.`}
+            </p>
+          </div>
+        </div>
+
+        {/* Two-column layout with left numbered side navigation */}
+        <div className="layout">
+          <nav className="side-nav" aria-label="Administration">
+            {navigation.map((item, index) => (
+              <button
+                key={item.id}
+                className={`nav-button ${effectiveView === item.id ? 'active' : ''}`}
+                onClick={() => setActiveView(item.id)}
+              >
+                <span className="nav-glyph">{String(index + 1).padStart(2, '0')}</span>
+                {item.label}
+              </button>
+            ))}
+          </nav>
+
+          <section className="content" id="view-content" aria-live="polite">
+            {/* VIEW: DASHBOARD (STAFF / OFFICERS ONLY) */}
+            {!isSuperAdmin && effectiveView === 'dashboard' && (
+              <div>
+                <div className="section-head">
+                  <div>
+                    <h2>Grievance Operations Dashboard</h2>
+                    <p>Live grievance metrics, SLA status distribution, and 7-day intake volume.</p>
+                  </div>
+                  <button className="button button-quiet button-small" onClick={() => { hydrate(); setToast('Dashboard metrics refreshed.'); }}>
+                    ↻ Refresh
+                  </button>
+                </div>
+
+                <div className="stat-grid">
+                  <div className="stat-card">
+                    <p className="eyebrow">Catalog Grievances</p>
+                    <div className="stat-val">{allowedTickets.length}</div>
+                    <div className="stat-sub">Across active jurisdiction scope</div>
+                  </div>
+                  <div className="stat-card">
+                    <p className="eyebrow">Awaiting Action</p>
+                    <div className="stat-val">{allowedTickets.filter((t) => t.status !== 'RESOLVED').length}</div>
+                    <div className="stat-sub">Pending or under active investigation</div>
+                  </div>
+                  <div className="stat-card">
+                    <p className="eyebrow">SLA At Risk</p>
+                    <div className="stat-val">{allowedTickets.filter((t) => t.slaStatus !== 'ON_TIME' && t.status !== 'RESOLVED').length}</div>
+                    <div className="stat-sub">Approaching deadline or overdue</div>
+                  </div>
+                  <div className="stat-card">
+                    <p className="eyebrow">Resolved Cases</p>
+                    <div className="stat-val">{allowedTickets.filter((t) => t.status === 'RESOLVED').length}</div>
+                    <div className="stat-sub">Closed with official action reports</div>
+                  </div>
+                </div>
+
+                {/* 7-Day Chart Panel */}
+                <div className="panel">
+                  <div className="panel-head">
+                    <h3>Grievance Intake Volume (Past 7 Days)</h3>
+                    <span className="table-secondary">Daily intake activity</span>
+                  </div>
+                  <div className="panel-body">
+                    <div className="chart-bars">
+                      {weeklyActivity.map((w) => {
+                        const pct = Math.round((w.count / maxWeekly) * 100);
+                        return (
+                          <div className="bar-col" key={w.label}>
+                            <span className="bar-val">{w.count}</span>
+                            <div className="bar-track">
+                              <div className="bar-fill" style={{ height: `${Math.max(6, pct)}%` }} />
+                            </div>
+                            <span className="bar-label">{w.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Scope Jurisdiction Summary Panel */}
+                <div className="panel" style={{ marginTop: '14px' }}>
+                  <div className="panel-head">
+                    <h3>Jurisdiction Coverage &amp; Response SLA</h3>
+                    <span className="table-secondary">Target response within 21 days</span>
+                  </div>
+                  <div className="panel-body">
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+                      <div style={{ padding: '12px', background: '#f8faf8', border: '1px solid var(--line)', borderRadius: '4px' }}>
+                        <span className="eyebrow">SCOPE MODE</span>
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--forest)', marginTop: '4px' }}>
+                          {activeRole.scopeType} ACCESS
+                        </div>
+                        <div className="table-secondary" style={{ marginTop: '4px' }}>
+                          {activeRole.scopeType === 'GLOBAL'
+                            ? 'National oversight across all 15 MHA divisions'
+                            : activeRole.scopeType === 'DIVISION'
+                            ? `Division: ${activeRole.divisionId?.replaceAll('_', ' ')}`
+                            : `Wards: ${activeWards.join(', ') || 'No wards'}`}
+                        </div>
+                      </div>
+                      <div style={{ padding: '12px', background: '#f8faf8', border: '1px solid var(--line)', borderRadius: '4px' }}>
+                        <span className="eyebrow">SLA HEALTH ON TRACK</span>
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: '#287a5f', marginTop: '4px' }}>
+                          {allowedTickets.length ? Math.round((allowedTickets.filter((t) => t.slaStatus === 'ON_TIME').length / allowedTickets.length) * 100) : 100}%
+                        </div>
+                        <div className="table-secondary" style={{ marginTop: '4px' }}>
+                          {allowedTickets.filter((t) => t.slaStatus === 'ON_TIME').length} of {allowedTickets.length} cases on time
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* VIEW: GRIEVANCE INBOX (STAFF / OFFICERS ONLY) */}
+            {!isSuperAdmin && effectiveView === 'grievances' && (
+              <div>
+                <div className="section-head">
+                  <div>
+                    <h2>Grievance Triage Queue</h2>
+                    <p>Review, investigate, and record official resolutions for citizen complaints.</p>
+                  </div>
+                  <button className="button button-quiet button-small" onClick={() => { hydrate(); setToast('Queue refreshed.'); }}>
+                    ↻ Refresh
+                  </button>
+                </div>
+
+                {!hasTicketRead ? (
+                  <div className="notice error">Your active role does not have Read access to the grievance queue.</div>
+                ) : (
+                  <div className="panel">
+                    <div className="panel-head">
+                      <h3>Active Grievance Cases</h3>
+                      <span className="table-secondary">{filteredTickets.length} cases</span>
+                    </div>
+                    <div className="panel-body">
+                      <div className="toolbar" style={{ marginBottom: '14px' }}>
+                        <input
+                          className="input search-input"
+                          placeholder="Search grievance ID, citizen, ward, district..."
+                          value={query}
+                          onChange={(e) => setQuery(e.target.value)}
+                        />
+                        <select
+                          className="select"
+                          style={{ width: '150px' }}
+                          value={statusFilter}
+                          onChange={(e) => setStatusFilter(e.target.value)}
+                        >
+                          <option value="ALL">All Status</option>
+                          <option value="PENDING">Pending</option>
+                          <option value="UNDER_INVESTIGATION">In progress</option>
+                          <option value="RESOLVED">Resolved</option>
+                        </select>
+                        <select
+                          className="select"
+                          style={{ width: '180px' }}
+                          value={divisionFilter}
+                          onChange={(e) => setDivisionFilter(e.target.value)}
+                        >
+                          <option value="ALL">All Divisions</option>
+                          {[...new Set(allowedTickets.map((t) => t.divisionId))].map((div) => (
+                            <option key={div} value={div}>
+                              {div.replaceAll('_', ' ')}
+                            </option>
+                          ))}
+                        </select>
+                        {(query || statusFilter !== 'ALL' || divisionFilter !== 'ALL') && (
+                          <button
+                            className="button button-quiet button-small"
+                            onClick={() => {
+                              setQuery('');
+                              setStatusFilter('ALL');
+                              setDivisionFilter('ALL');
+                            }}
+                          >
+                            Reset filters
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Grievance ID</th>
+                              <th>Citizen / Language</th>
+                              <th>Ward / District</th>
+                              <th>Category</th>
+                              <th>SLA Status</th>
+                              <th>Status</th>
+                              <th>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredTickets.map((ticket) => (
+                              <tr key={ticket.id} onClick={() => setSelectedTicketId(ticket.id)} style={{ cursor: 'pointer' }}>
+                                <td>
+                                  <span className="table-primary" style={{ color: 'var(--forest)' }}>
+                                    {ticket.grievanceId}
+                                  </span>
+                                  <span className="table-secondary">{formatDate(ticket.submissionTimestamp)}</span>
+                                </td>
+                                <td>
+                                  <span className="table-primary">{ticket.complainantName}</span>
+                                  <span className="table-secondary">{ticket.detectedLanguage}</span>
+                                </td>
+                                <td>
+                                  <span className="table-primary">{ticket.wardId.replace('WARD-', 'Ward ')}</span>
+                                  <span className="table-secondary">{ticket.location.district}</span>
+                                </td>
+                                <td>
+                                  <span className="category-pill">{categoryLabel(ticket.category)}</span>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`sla-badge ${
+                                      ticket.status === 'RESOLVED'
+                                        ? 'sla-ontime'
+                                        : ticket.slaStatus === 'OVERDUE'
+                                        ? 'sla-overdue'
+                                        : ticket.slaStatus === 'WARNING'
+                                        ? 'sla-warning'
+                                        : 'sla-ontime'
+                                    }`}
+                                  >
+                                    <i />
+                                    {ticket.status === 'RESOLVED' ? 'CLOSED' : ticket.slaStatus.replace('_', ' ')}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`status ${
+                                      ticket.status === 'RESOLVED'
+                                        ? 'status-resolved'
+                                        : ticket.status === 'UNDER_INVESTIGATION'
+                                        ? 'status-under_investigation'
+                                        : 'status-pending'
+                                    }`}
+                                  >
+                                    {friendlyStatus(ticket.status)}
+                                  </span>
+                                </td>
+                                <td>
+                                  <button
+                                    className="button button-quiet button-small"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedTicketId(ticket.id);
+                                    }}
+                                  >
+                                    Review →
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {filteredTickets.length === 0 && <div className="empty">No matching grievances in your scope.</div>}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* VIEW: STAFF ACCOUNTS (SUPER ADMIN ONLY) */}
+            {effectiveView === 'users' && isSuperAdmin && (
+              <div>
+                <div className="section-head">
+                  <div>
+                    <h2>Staff Accounts</h2>
+                    <p>Create staff access, manage role assignments, and revoke active sessions.</p>
+                  </div>
+                  <button className="button button-primary button-small" onClick={() => setModal('user')}>
+                    + Add Staff
+                  </button>
+                </div>
+
+                <div className="panel">
+                  <div className="panel-head">
+                    <h3>Staff Directory</h3>
+                    <span className="table-secondary">{users.length} accounts</span>
+                  </div>
+                  <div className="panel-body">
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Staff Member</th>
+                            <th>Role</th>
+                            <th>Scope / Wards</th>
+                            <th>Status</th>
+                            <th>Last Sign-In</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {users.map((person) => (
+                            <tr key={person.id}>
+                              <td>
+                                <span className="table-primary">{person.name}</span>
+                                <span className="table-secondary">{person.email}</span>
+                              </td>
+                              <td>{roles.find((r) => r.id === person.roleId)?.name ?? 'No role'}</td>
+                              <td>{person.assignedWards.length ? person.assignedWards.join(', ') : 'Role default'}</td>
+                              <td>
+                                <span className={`status ${person.isActive ? 'status-approved' : 'inactive'}`}>
+                                  {person.isActive ? 'Active' : 'Suspended'}
+                                </span>
+                              </td>
+                              <td>
+                                {person.lastSignIn ? new Date(person.lastSignIn).toLocaleString('en-IN') : 'Never'}
+                              </td>
+                              <td>
+                                <div className="row-actions">
+                                  <button
+                                    className="button button-quiet button-small"
+                                    onClick={() => resetPassword(person)}
+                                  >
+                                    Reset password
+                                  </button>
+                                  <button
+                                    className={`button ${person.isActive ? 'button-danger' : 'button-quiet'} button-small`}
+                                    disabled={person.id === sessionUser.id}
+                                    onClick={() => toggleUser(person)}
+                                  >
+                                    {person.isActive ? 'Suspend' : 'Reactivate'}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* VIEW: ROLES & PERMISSIONS (SUPER ADMIN ONLY) */}
+            {effectiveView === 'roles' && isSuperAdmin && (
+              <div>
+                <div className="section-head">
+                  <div>
+                    <h2>Roles &amp; Permissions</h2>
+                    <p>Define custom officer roles, scope boundaries, and action permissions.</p>
+                  </div>
+                  <button className="button button-primary button-small" onClick={() => setModal('role')}>
+                    + New Role
+                  </button>
+                </div>
+
+                <div className="panel">
+                  <div className="panel-head">
+                    <h3>Role Settings &amp; Permissions Matrix</h3>
+                    <span className="table-secondary">{roles.length} roles configured</span>
+                  </div>
+                  <div className="panel-body">
+                    <div className="role-settings-card">
+                      <div className="role-settings-toolbar">
+                        <strong>Select Role</strong>
+                        <select
+                          className="select"
+                          style={{ width: '260px' }}
+                          value={selectedRoleId || currentRole?.id}
+                          onChange={(e) => setSelectedRoleId(e.target.value)}
+                        >
+                          {roles.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name} {r.isSystem ? '· System' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {currentRole && (
+                        <>
+                          <div className="role-editor">
+                            <div className="field">
+                              <label>Role name</label>
+                              <input
+                                className="input"
+                                value={roleName}
+                                disabled={currentRole.isSystem}
+                                onChange={(e) => setRoleName(e.target.value)}
+                              />
+                            </div>
+                            <div className="role-scope-summary">
+                              Scope:{' '}
+                              <strong>
+                                {currentRole.scopeType}
+                                {currentRole.divisionId ? ` · ${currentRole.divisionId.replaceAll('_', ' ')}` : ''}
+                                {currentRole.wardIds?.length ? ` · ${currentRole.wardIds.join(', ')}` : ''}
+                              </strong>
+                            </div>
+                          </div>
+
+                          <div className="permission-matrix">
+                            <div className="permission-matrix-head">
+                              <span>Permission Module</span>
+                              <span>Access Granted</span>
+                            </div>
+                            {(
+                              [
+                                ['tickets:read', 'Read grievance tickets in assigned scope'],
+                                ['tickets:resolve', 'Resolve grievances & submit action reports'],
+                                ['tickets:reroute', 'Reroute cases and change triage statuses'],
+                                ['users:manage', 'Manage staff accounts and permissions'],
+                                ['analytics:view', 'View jurisdiction analytics & audit records'],
+                              ] as const
+                            ).map(([perm, label]) => (
+                              <label className="permission-matrix-row" key={perm}>
+                                <span>{label}</span>
+                                <input
+                                  type="checkbox"
+                                  disabled={currentRole.isSystem}
+                                  checked={rolePermissions.includes(perm)}
+                                  onChange={() =>
+                                    setRolePermissions((curr) =>
+                                      curr.includes(perm) ? curr.filter((p) => p !== perm) : [...curr, perm]
+                                    )
+                                  }
+                                />
+                              </label>
+                            ))}
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span className="table-secondary">
+                              {currentRole.isSystem
+                                ? 'System roles are protected. Create a custom role to configure custom permissions.'
+                                : `${rolePermissions.length} permissions enabled.`}
+                            </span>
+                            {!currentRole.isSystem && (
+                              <button className="button button-primary" onClick={updateRole}>
+                                Save permissions
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Available Roles Panel */}
+                <div className="panel" style={{ marginTop: '14px' }}>
+                  <div className="panel-head">
+                    <h3>Available roles</h3>
+                    <span className="table-secondary">{roles.length} roles</span>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>NAME</th>
+                          <th>TYPE</th>
+                          <th>ASSIGNED USERS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {roles.map((role) => (
+                          <tr
+                            key={role.id}
+                            onClick={() => {
+                              setSelectedRoleId(role.id);
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <td>
+                              <span className="table-primary">{role.name}</span>
+                            </td>
+                            <td>
+                              <span className="status">
+                                {role.isSystem ? 'System' : 'Custom'}
+                              </span>
+                            </td>
+                            <td>{users.filter((u) => u.roleId === role.id).length}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* VIEW: ACTIVITY FEED (STAFF / OFFICERS ONLY) */}
+            {!isSuperAdmin && effectiveView === 'activity_feed' && (
+              <div>
+                <div className="section-head">
+                  <div>
+                    <h2>Recent Operations &amp; Activity Feed</h2>
+                    <p>Live stream of administrative actions, intake submissions, and case updates.</p>
+                  </div>
+                  <button className="button button-quiet button-small" onClick={() => { hydrate(); setToast('Activity feed refreshed.'); }}>
+                    ↻ Refresh
+                  </button>
+                </div>
+
+                <div className="panel">
+                  <div className="panel-head">
+                    <h3>Activity Stream</h3>
+                    <span className="table-secondary">{activities.length} events</span>
+                  </div>
+                  <div className="panel-body">
+                    <div className="activity-list">
+                      {activities.map((a) => (
+                        <div className="activity-item" key={a.id}>
+                          <div>
+                            <span className="activity-title">{a.summary}</span>
+                            <div className="activity-meta">
+                              <span>{a.actorName ?? 'System'}</span> &middot;{' '}
+                              <span className="status" style={{ fontSize: '9px', padding: '2px 5px' }}>
+                                {a.type}
+                              </span>{' '}
+                              &middot; <span>{new Date(a.createdAt).toLocaleString('en-IN')}</span>
+                            </div>
+                          </div>
+                          {a.details && Object.keys(a.details).length > 0 && (
+                            <button
+                              className="button button-quiet button-small"
+                              onClick={() => {
+                                setActiveAuditDetail(a);
+                                setModal('audit-details');
+                              }}
+                            >
+                              Inspect
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      {activities.length === 0 && <div className="empty">No recent activity logged.</div>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* VIEW: AUDIT LOG (STAFF / OFFICERS ONLY) */}
+            {!isSuperAdmin && effectiveView === 'audit' && (
+              <div>
+                <div className="section-head">
+                  <div>
+                    <h2>Audit Log</h2>
+                    <p>Immutable, append-only record of all administrative operations, logins, and case updates.</p>
+                  </div>
+                  <div className="toolbar">
+                    <button className="button button-quiet button-small" onClick={downloadAuditCsv}>
+                      Export Audit CSV
+                    </button>
+                  </div>
+                </div>
+
+                <div className="panel">
+                  <div className="panel-head">
+                    <h3>Audit Records</h3>
+                    <span className="table-secondary">{activities.length} entries</span>
+                  </div>
+                  <div className="panel-body">
+                    <div className="toolbar" style={{ marginBottom: '14px' }}>
+                      <select
+                        className="select"
+                        style={{ width: '180px' }}
+                        value={auditFilter}
+                        onChange={(e) => setAuditFilter(e.target.value)}
+                      >
+                        <option value="ALL">All Event Types</option>
+                        {[...new Set(activities.map((a) => a.type))].map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Timestamp</th>
+                            <th>Actor</th>
+                            <th>Event Type</th>
+                            <th>Summary</th>
+                            <th>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activities
+                            .filter((a) => auditFilter === 'ALL' || a.type === auditFilter)
+                            .map((a) => (
+                              <tr key={a.id}>
+                                <td style={{ fontFamily: 'DM Mono, monospace', fontSize: '10px' }}>
+                                  {new Date(a.createdAt).toLocaleString('en-IN')}
+                                </td>
+                                <td>
+                                  <strong>{a.actorName ?? 'System'}</strong>
+                                </td>
+                                <td>
+                                  <span className="status">{a.type}</span>
+                                </td>
+                                <td>{a.summary}</td>
+                                <td>
+                                  <button
+                                    className="button button-quiet button-small"
+                                    onClick={() => {
+                                      setActiveAuditDetail(a);
+                                      setModal('audit-details');
+                                    }}
+                                  >
+                                    View JSON
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* VIEW: WARD DIRECTORY (STAFF / OFFICERS ONLY) */}
+            {!isSuperAdmin && effectiveView === 'wards' && (
+              <div>
+                <div className="section-head">
+                  <div>
+                    <h2>Ward Directory &amp; Jurisdictions</h2>
+                    <p>Designated operational wards and jurisdictional districts across India.</p>
+                  </div>
+                </div>
+
+                <div className="ward-grid">
+                  {wardList.map((ward) => (
+                    <div className="ward-card" key={ward.id}>
+                      <div className="ward-card-head">
+                        <span className="eyebrow">{ward.id}</span>
+                        <span className="status">{ward.zone ?? 'Central Zone'}</span>
+                      </div>
+                      <h3>{ward.name}</h3>
+                      <div className="ward-card-meta">
+                        {ward.district}, {ward.state} &middot; Pincode {ward.pincodePrefix}XXX
+                      </div>
+                      <div className="table-secondary" style={{ marginTop: '6px' }}>
+                        Active complaints:{' '}
+                        <strong>{tickets.filter((t) => t.wardId === ward.id).length}</strong>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      </main>
+
+      {/* Case Details Drawer */}
+      {selectedTicket && (
+        <>
+          <button className="drawer-scrim" onClick={() => setSelectedTicketId(null)} aria-label="Close" />
+          <TicketDrawer
+            ticket={selectedTicket}
+            role={activeRole}
+            onClose={() => setSelectedTicketId(null)}
+            onSubmit={submitReport}
+          />
+        </>
+      )}
+
+      {/* Modal: Add Staff */}
+      {modal === 'user' && (
+        <div className="dialog-backdrop" onClick={() => setModal(null)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-head">
+              <h2>Onboard Staff Member</h2>
+              <button type="button" onClick={() => setModal(null)}>
+                ×
+              </button>
+            </div>
+            <AddStaffForm
+              roles={roles}
+              wards={wardList}
+              onClose={() => setModal(null)}
+              onSubmit={addUser}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Modal: New Role */}
+      {modal === 'role' && (
+        <div className="dialog-backdrop" onClick={() => setModal(null)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-head">
+              <h2>Create Department Role</h2>
+              <button type="button" onClick={() => setModal(null)}>
+                ×
+              </button>
+            </div>
+            <NewRoleForm
+              wards={wardList}
+              onClose={() => setModal(null)}
+              onSubmit={addRole}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Profile */}
+      {modal === 'profile' && (
+        <div className="dialog-backdrop" onClick={() => setModal(null)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-head">
+              <h2>User Profile</h2>
+              <button type="button" onClick={() => setModal(null)}>
+                ×
+              </button>
+            </div>
+            <div className="profile-details">
+              <div className="profile-detail-row">
+                <span className="field-label">Full Name</span>
+                <strong className="profile-detail-value">{sessionUser.name}</strong>
+              </div>
+              <div className="profile-detail-row">
+                <span className="field-label">Department Email</span>
+                <strong className="profile-detail-value">{sessionUser.email}</strong>
+              </div>
+              <div className="profile-detail-row">
+                <span className="field-label">Contact Phone</span>
+                <strong className="profile-detail-value">{sessionUser.mobileNumber}</strong>
+              </div>
+              <div className="profile-detail-row">
+                <span className="field-label">Assigned Role</span>
+                <strong className="profile-detail-value">{activeRole.name}</strong>
+              </div>
+              <div className="profile-detail-row">
+                <span className="field-label">Jurisdiction Scope</span>
+                <strong className="profile-detail-value">
+                  {activeRole.scopeType} {activeRole.divisionId ? `· ${activeRole.divisionId.replaceAll('_', ' ')}` : ''}
+                </strong>
+              </div>
+            </div>
+            <div className="dialog-actions">
+              <button className="button button-quiet" onClick={() => setModal(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Settings */}
+      {modal === 'settings' && (
+        <div className="dialog-backdrop" onClick={() => setModal(null)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-head">
+              <h2>Account Settings</h2>
+              <button type="button" onClick={() => setModal(null)}>
+                ×
+              </button>
+            </div>
+            <div className="dialog-body">
+              <SettingsDialog
+                onChangePassword={changeOwnPassword}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Audit Event JSON Details */}
+      {modal === 'audit-details' && activeAuditDetail && (
+        <div className="dialog-backdrop" onClick={() => setModal(null)}>
+          <div className="dialog" style={{ width: '600px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-head">
+              <h2>Audit Event Details</h2>
+              <button type="button" onClick={() => setModal(null)}>
+                ×
+              </button>
+            </div>
+            <div className="dialog-body">
+              <pre
+                style={{
+                  background: '#f8faf8',
+                  padding: '14px',
+                  borderRadius: '4px',
+                  border: '1px solid var(--line)',
+                  fontSize: '11px',
+                  fontFamily: 'DM Mono, monospace',
+                  overflow: 'auto',
+                  maxHeight: '340px',
+                }}
+              >
+                {JSON.stringify(activeAuditDetail, null, 2)}
+              </pre>
+            </div>
+            <div className="dialog-actions">
+              <button className="button button-quiet" onClick={() => setModal(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Credential Notification Modal */}
+      {credentialNotice && (
+        <div className="dialog-backdrop">
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-head">
+              <h2>One-Time Account Credentials</h2>
+            </div>
+            <div className="dialog-body">
+              <p className="table-secondary">
+                Share these credentials with {credentialNotice.name}. The temporary password is shown only once.
+              </p>
+              <div className="field">
+                <label>Department Email</label>
+                <div className="credential">{credentialNotice.email}</div>
+              </div>
+              <div className="field">
+                <label>Temporary Password</label>
+                <div className="credential">{credentialNotice.password}</div>
+              </div>
+            </div>
+            <div className="dialog-actions">
+              <button
+                className="button button-quiet"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(
+                    `Email: ${credentialNotice.email}\nTemporary password: ${credentialNotice.password}`
+                  );
+                  setToast('Credentials copied to clipboard.');
+                }}
+              >
+                Copy credentials
+              </button>
+              <button className="button button-primary" onClick={() => setCredentialNotice(null)}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Must Change Password Forced Modal */}
+      {mustChangePassword && (
+        <div className="dialog-backdrop">
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-head">
+              <h2>Security Required: Change Password</h2>
+            </div>
+            <div className="dialog-body">
+              <p className="notice">You must change your temporary password before accessing the workspace.</p>
+              <MustChangePasswordForm onSave={changeOwnPassword} onSignOut={signOut} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      <div id="toast" className={`toast ${toast ? 'visible' : ''}`}>
+        {toast}
       </div>
-    </main>
-    {selected && <TicketDrawer ticket={selected} role={activeRole} onClose={() => setSelectedId(null)} onSubmit={submitReport}/>}
-    {modal && <ManagementModal kind={modal} roles={roles} canManage={canManage} onClose={() => setModal(null)} onRole={addRole} onUser={addUser}/>}
-    {toast && <div className="toast"><CheckCircle2 size={17}/><span>{toast}</span><button onClick={() => setToast('')} aria-label="Dismiss"><X size={14}/></button></div>}
-  </div>;
+
+      {/* Back to top floating button */}
+      <button
+        id="back-to-top"
+        className="back-to-top"
+        type="button"
+        hidden={!showBackToTop}
+        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+      >
+        ↑ <span>Top</span>
+      </button>
+    </div>
+  );
 }
 
-function formatDate(value: string) { return new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short' }).format(new Date(value)); }
-function StatCard({icon,tone,label,value,foot}:{icon:React.ReactNode;tone:string;label:string;value:string;foot:string}) { return <div className="stat-card"><div className={`stat-icon ${tone}`}>{icon}</div><div className="stat-label">{label}</div><div className="stat-value">{value}</div><div className="stat-foot">{foot}</div><div className={`stat-trend ${tone}`}><ArrowRight size={13}/></div></div>; }
-function SlaBadge({status}:{status:Ticket['slaStatus']}) { const names={ON_TIME:'On time',WARNING:'At risk',OVERDUE:'Overdue'}; return <span className={`sla-badge sla-${status.toLowerCase()}`}><i/>{names[status]}</span>; }
+/* =========================================================
+   COMPONENTS
+========================================================= */
 
-function TicketDrawer({ticket,role,onClose,onSubmit}:{ticket:Ticket;role:Role;onClose:()=>void;onSubmit:(id:string,status:TicketStatus,report:string)=>void}) {
-  const [status,setStatus]=useState<TicketStatus>(ticket.status); const [report,setReport]=useState(ticket.actionTakenReport ?? ''); const [tab,setTab]=useState<'context'|'history'>('context');
-  useEffect(()=>{setStatus(ticket.status);setReport(ticket.actionTakenReport ?? '');},[ticket]);
-  const details=Object.entries(ticket.details).map(([key,value])=>({label:prettyKey(key),value:typeof value==='object' ? Object.entries(value as Record<string,string>).map(([k,v])=>`${prettyKey(k)}: ${v}`).join(' · ') : String(value)}));
-  const canAct=role.permissions.includes('tickets:resolve')||role.permissions.includes('tickets:reroute');
-  return <><button className="drawer-scrim" onClick={onClose} aria-label="Close case panel"/><aside className="ticket-drawer"><header className="drawer-header"><div><div className="drawer-kicker"><span className="eyebrow-dot"/> GRIEVANCE WORKSPACE</div><h2>{ticket.grievanceId}</h2><span className="drawer-subtitle">Submitted {formatDate(ticket.submissionTimestamp)} · {ticket.location.district}, {ticket.location.state}</span></div><button className="icon-button close-drawer" onClick={onClose} aria-label="Close"><X size={19}/></button></header><div className="drawer-person"><div className="drawer-avatar">{ticket.complainantName.split(' ').map(part=>part[0]).slice(0,2).join('')}</div><div className="drawer-person-info"><b>{ticket.complainantName}</b><span>{ticket.mobileNumber} <i>·</i> {ticket.location.pincode}</span></div><span className={`status-pill status-${ticket.status.toLowerCase()}`}><i/>{friendlyStatus(ticket.status)}</span></div><div className="drawer-tabs"><button className={tab==='context'?'selected':''} onClick={()=>setTab('context')}>Citizen context</button><button className={tab==='history'?'selected':''} onClick={()=>setTab('history')}>Case timeline</button></div>{tab==='context'?<div className="drawer-body"><div className="case-tags"><span className="category-pill">{categoryLabel(ticket.category)}</span><SlaBadge status={ticket.slaStatus}/><span className="language-pill"><Globe2 size={12}/>{ticket.detectedLanguage}</span></div><section className="detail-section"><div className="section-title"><span className="section-icon audio"><Headphones size={14}/></span><div><b>Original voice complaint</b><span>Illustrative demo clip · replace with intake audio URL</span></div></div><div className="audio-player"><button className="play-button" onClick={()=>{const player=document.getElementById(`audio-${ticket.id}`) as HTMLAudioElement | null; if(player) void player.play();}}><AudioLines size={18}/></button><div className="audio-track"><div className="audio-wave">{Array.from({length:48},(_,i)=><i key={i} style={{height:`${5+((i*13+7)%19)}px`}}/>)}</div><div className="audio-meta"><span>Demo voice · 0:03</span><span><FileAudio size={11}/> WAV</span></div></div><audio id={`audio-${ticket.id}`} src={ticket.audioFileUrl} preload="none"/><button className="audio-more" aria-label="Audio options"><MoreHorizontal size={16}/></button></div></section><section className="detail-section"><div className="section-title"><span className="section-icon text"><MessageSquareText size={14}/></span><div><b>Complaint transcript</b><span>Original and machine translation</span></div></div><div className="transcript-grid"><div className="transcript-box"><div><span>ORIGINAL · {ticket.detectedLanguage.toUpperCase()}</span><button title="Copy original" onClick={()=>void navigator.clipboard?.writeText(ticket.originalRegionalText)}><FileText size={13}/></button></div><p>{ticket.originalRegionalText}</p></div><div className="translate-arrow"><ArrowDownUp size={14}/></div><div className="transcript-box english"><div><span><Sparkles size={11}/> ENGLISH TRANSLATION</span><button title="Copy translation" onClick={()=>void navigator.clipboard?.writeText(ticket.translatedEnglishText)}><FileText size={13}/></button></div><p>{ticket.translatedEnglishText}</p></div></div></section><section className="detail-section"><div className="section-title"><span className="section-icon info"><FileText size={14}/></span><div><b>Incident details</b><span>{categoryLabel(ticket.category)} · {ticket.divisionId.replaceAll('_',' ')}</span></div></div><div className="details-grid">{details.map(detail=><div className="detail-field" key={detail.label}><span>{detail.label}</span><b>{detail.value}</b></div>)}</div></section><section className="detail-section location-section"><div className="section-title"><span className="section-icon location"><MapPin size={14}/></span><div><b>Reported location</b><span>{ticket.wardId.replace('WARD-','Ward ')}</span></div></div><div className="location-card"><MapPin size={15}/><div><b>{ticket.location.completeAddress}</b><span>{ticket.location.district}, {ticket.location.state} · {ticket.location.pincode}</span></div></div></section>{ticket.evidence.length>0&&<section className="detail-section"><div className="section-title"><span className="section-icon info"><Paperclip size={14}/></span><div><b>Attachments</b><span>{ticket.evidence.length} evidence files</span></div></div>{ticket.evidence.map(file=><div className="attachment-row" key={file.id}><FileText size={15}/>{file.fileName}<button onClick={()=>window.open(file.url,'_blank')}>Open</button></div>)}</section>}</div>:<div className="timeline-body"><div className="timeline-entry"><span className="timeline-dot blue"/><div><b>Grievance received</b><span>{new Date(ticket.submissionTimestamp).toLocaleString('en-IN')}</span><p>Citizen submitted a {ticket.detectedLanguage} voice complaint via multilingual intake.</p></div></div><div className="timeline-entry"><span className="timeline-dot amber"/><div><b>Routed to {ticket.divisionId.replaceAll('_',' ')}</b><span>{ticket.wardId} · {ticket.location.district}</span><p>Case assigned using department jurisdiction and location mapping.</p></div></div>{ticket.actionTakenReport&&<div className="timeline-entry"><span className="timeline-dot green"/><div><b>Officer response recorded</b><span>Saved in this browser</span><p>{ticket.actionTakenReport}</p></div></div>}</div>}<footer className="action-desk"><div className="action-desk-title"><div><div className="panel-kicker">OFFICER ACTION DESK</div><span>Update this grievance</span></div><ShieldCheck size={17}/></div><label className="form-label">CASE STATUS<select value={status} onChange={e=>setStatus(e.target.value as TicketStatus)} disabled={!canAct}><option value="PENDING">Pending</option><option value="UNDER_INVESTIGATION">Under investigation</option><option value="RESOLVED">Resolved</option></select><ChevronDown size={13}/></label><label className="form-label report-label">ACTION TAKEN REPORT <span>ENGLISH</span><textarea value={report} onChange={e=>setReport(e.target.value)} disabled={!canAct} placeholder="Record the action taken, findings, or next steps…" rows={3}/></label><button className="button button-primary submit-button" disabled={!canAct||!report.trim()} onClick={()=>onSubmit(ticket.id,status,report.trim())}><Send size={15}/> Submit resolution</button><div className="translation-note"><Sparkles size={12}/> Translation and citizen notification are simulated</div></footer></aside></>;
+function SignInScreen({
+  setup,
+  error,
+  onSignIn,
+  onClearError,
+  onInitialAdmin,
+}: {
+  setup: boolean;
+  error: string;
+  onSignIn: (email: string, password: string) => void;
+  onClearError: () => void;
+  onInitialAdmin: (p: { name: string; email: string; mobileNumber: string; password: string }) => void;
+}) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [mobileNumber, setMobileNumber] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (setup) {
+      if (password !== confirmPassword) {
+        onClearError();
+        return;
+      }
+      onInitialAdmin({ name, email, mobileNumber, password });
+    } else {
+      onSignIn(email, password);
+    }
+  };
+
+  return (
+    <div className="login-shell">
+      <div className="login-aside">
+        <div className="brand">
+          <div className="brand-mark">MHA</div>
+          <div>
+            <p className="brand-title">MINISTRY OF HOME AFFAIRS</p>
+            <p className="brand-subtitle">Grievance Operations &amp; Management</p>
+          </div>
+        </div>
+        <div>
+          <h1>Grievance operations, in one place.</h1>
+          <p>
+            Unified dashboard for multilingual citizen grievance intake, jurisdictional triage, officer action reports,
+            and department-wide SLA accountability.
+          </p>
+        </div>
+        <div className="login-aside-foot">GOVERNMENT OF INDIA &middot; INTERNAL MHA SERVICE</div>
+      </div>
+
+      <div className="login-main">
+        <form className="login-form" onSubmit={handleSubmit}>
+          <div>
+            <h2>{setup ? 'Initial Administrator Setup' : 'Staff Sign In'}</h2>
+            <p>{setup ? 'Create the first Super Admin account.' : 'Access your authorized grievance desk.'}</p>
+          </div>
+
+          {error && <div className="notice error">{error}</div>}
+
+          {setup && (
+            <>
+              <label>
+                Full name
+                <input
+                  className="input"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Administrator Sharma"
+                />
+              </label>
+              <label>
+                Mobile number
+                <input
+                  className="input"
+                  required
+                  value={mobileNumber}
+                  onChange={(e) => setMobileNumber(e.target.value)}
+                  placeholder="+91 98765 43210"
+                />
+              </label>
+            </>
+          )}
+
+          <label>
+            Department email / Login ID
+            <input
+              className="input"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                onClearError();
+              }}
+              placeholder="officer@mha.gov.in"
+            />
+          </label>
+
+          <label>
+            Password
+            <div className="password-input-wrap">
+              <input
+                className="input"
+                type={showPassword ? 'text' : 'password'}
+                required
+                minLength={setup ? 8 : undefined}
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  onClearError();
+                }}
+                placeholder={setup ? 'At least 8 characters' : 'Enter password'}
+              />
+              <button
+                type="button"
+                className="password-toggle-btn"
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
+          </label>
+
+          {setup && (
+            <label>
+              Confirm password
+              <input
+                className="input"
+                type={showPassword ? 'text' : 'password'}
+                required
+                minLength={8}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
+            </label>
+          )}
+
+          <button className="button button-primary" type="submit" style={{ marginTop: '6px' }}>
+            {setup ? 'Create Administrator Account' : 'Sign in to Workspace'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }
 
-function prettyKey(key:string) { return key.replace(/([A-Z])/g,' $1').replace(/^./,letter=>letter.toUpperCase()).replace('Ifsc','IFSC').replace('Utr','UTR').replace('Aadhaar','Aadhaar'); }
-function ManagementModal({kind,roles,canManage,onClose,onRole,onUser}:{kind:Exclude<ModalKind,null>;roles:Role[];canManage:boolean;onClose:()=>void;onRole:(role:Role)=>void;onUser:(user:User)=>void}) {
-  const [name,setName]=useState(''); const [email,setEmail]=useState(''); const [phone,setPhone]=useState(''); const [roleId,setRoleId]=useState(roles[0]?.id??''); const [scope,setScope]=useState<Role['scopeType']>('WARD'); const [division,setDivision]=useState<Role['divisionId']>('CYBER_INFORMATION_SECURITY'); const [permissionList,setPermissionList]=useState<Permission[]>(['tickets:read']); const [selectedWards,setSelectedWards]=useState<string[]>([]); const [description,setDescription]=useState('');
-  const pickedRole=roles.find(role=>role.id===roleId); const selectableWards=pickedRole?.scopeType==='WARD'&&pickedRole.wardIds?.length?wards.filter(ward=>pickedRole.wardIds?.includes(ward.id)):wards; const permissions:Permission[]=['tickets:read','tickets:resolve','tickets:reroute','users:manage','analytics:view'];
-  if(!canManage) return null;
-  const submit=(event:React.FormEvent)=>{event.preventDefault();if(!name.trim())return;if(kind==='role'){onRole({id:`ROLE-CUSTOM-${Date.now()}`,name:name.trim(),description:description.trim()||'Custom officer role.',permissions:permissionList,scopeType:scope,...(scope==='DIVISION'?{divisionId:division}:{}),...(scope==='WARD'?{wardIds:selectedWards}:{}),isSystem:false});}else{if(!email.trim()||!phone.trim()||!pickedRole)return;onUser({id:`USER-${Date.now()}`,name:name.trim(),email:email.trim(),mobileNumber:phone.trim(),roleId,assignedWards:pickedRole.scopeType==='WARD'?selectedWards:[],isActive:true,avatarInitials:name.trim().split(/\s+/).slice(0,2).map(v=>v[0]).join('').toUpperCase()});}};
-  return <div className="modal-scrim" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><form className="management-modal" onSubmit={submit}><header><div><div className="panel-kicker">SUPER ADMINISTRATION</div><h2>{kind==='role'?'Create a role':'Onboard an officer'}</h2><p>{kind==='role'?'Define permissions and the jurisdiction this role can access.':'Add a user and assign their department role and wards.'}</p></div><button type="button" className="icon-button" onClick={onClose}><X size={18}/></button></header><div className="modal-body">{kind==='role'?<><label className="modal-label">ROLE NAME<input required value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Regional Desk Officer"/></label><label className="modal-label">DESCRIPTION<input value={description} onChange={e=>setDescription(e.target.value)} placeholder="What this role is responsible for"/></label><div className="modal-label">JURISDICTION SCOPE<div className="scope-options">{(['GLOBAL','DIVISION','WARD'] as const).map(value=><button type="button" className={scope===value?'selected':''} onClick={()=>setScope(value)} key={value}><span>{value}</span><small>{value==='GLOBAL'?'All cases':value==='DIVISION'?'One MHA division':'Assigned wards'}</small></button>)}</div></div>{scope==='DIVISION'&&<label className="modal-label">MHA DIVISION<select value={division} onChange={e=>setDivision(e.target.value as Role['divisionId'])}>{[...new Set(initialTickets.map(t=>t.divisionId))].map(d=><option key={d} value={d}>{d.replaceAll('_',' ')}</option>)}</select></label>}{scope==='WARD'&&<div className="modal-label">WARD ACCESS<div className="ward-checkboxes">{wards.map(ward=><label key={ward.id}><input type="checkbox" checked={selectedWards.includes(ward.id)} onChange={e=>setSelectedWards(e.target.checked?[...selectedWards,ward.id]:selectedWards.filter(id=>id!==ward.id))}/><span><b>{ward.id}</b><small>{ward.name} · {ward.district}</small></span></label>)}</div></div>}<div className="modal-label">PERMISSIONS<div className="permission-grid">{permissions.map(permission=><label key={permission}><input type="checkbox" checked={permissionList.includes(permission)} onChange={e=>setPermissionList(e.target.checked?[...permissionList,permission]:permissionList.filter(value=>value!==permission))}/><span>{permission}</span></label>)}</div></div></>:<><label className="modal-label">OFFICER NAME<input required value={name} onChange={e=>setName(e.target.value)} placeholder="Full name"/></label><div className="modal-two-col"><label className="modal-label">EMAIL<input required type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@mha.gov.in"/></label><label className="modal-label">MOBILE NUMBER<input required value={phone} onChange={e=>setPhone(e.target.value)} placeholder="+91 98XXX XXXXX"/></label></div><label className="modal-label">ASSIGN ROLE<select value={roleId} onChange={e=>setRoleId(e.target.value)}>{roles.map(role=><option key={role.id} value={role.id}>{role.name} · {role.scopeType}</option>)}</select></label>{pickedRole?.scopeType==='WARD'&&<div className="modal-label">ASSIGN WARDS<div className="ward-checkboxes">{selectableWards.map(ward=><label key={ward.id}><input type="checkbox" checked={selectedWards.includes(ward.id)} onChange={e=>setSelectedWards(e.target.checked?[...selectedWards,ward.id]:selectedWards.filter(id=>id!==ward.id))}/><span><b>{ward.id}</b><small>{ward.name} · {ward.district}</small></span></label>)}</div></div>}<div className="onboard-note"><ShieldCheck size={16}/><span>Access is limited by the selected role and ward assignments.</span></div></>}</div><footer><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button className="button button-primary" type="submit"><Check size={15}/>{kind==='role'?'Create role':'Add officer'}</button></footer></form></div>;
+function TicketDrawer({
+  ticket,
+  role,
+  onClose,
+  onSubmit,
+}: {
+  ticket: Ticket;
+  role: Role;
+  onClose: () => void;
+  onSubmit: (id: string, status: TicketStatus, report: string) => void;
+}) {
+  const [status, setStatus] = useState<TicketStatus>(ticket.status);
+  const [report, setReport] = useState(ticket.actionTakenReport ?? '');
+  const [tab, setTab] = useState<'context' | 'timeline'>('context');
+
+  const canAct = role.permissions.includes('tickets:resolve') || role.permissions.includes('tickets:reroute');
+  const details = Object.entries(ticket.details).map(([key, value]) => ({
+    label: prettyKey(key),
+    value:
+      typeof value === 'object' && value !== null
+        ? Object.entries(value as Record<string, string>)
+            .map(([k, v]) => `${prettyKey(k)}: ${v}`)
+            .join(' · ')
+        : String(value),
+  }));
+
+  return (
+    <aside className="ticket-drawer">
+      <header className="drawer-header">
+        <div>
+          <span className="drawer-kicker">Grievance Case File</span>
+          <h2>{ticket.grievanceId}</h2>
+          <span className="drawer-subtitle">
+            Submitted {formatDate(ticket.submissionTimestamp)} &middot; {ticket.location.district}, {ticket.location.state}
+          </span>
+        </div>
+        <button className="close-drawer" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+      </header>
+
+      <div className="drawer-person">
+        <div className="drawer-avatar">
+          {ticket.complainantName
+            .split(' ')
+            .map((p) => p[0])
+            .slice(0, 2)
+            .join('')}
+        </div>
+        <div className="drawer-person-info">
+          <b>{ticket.complainantName}</b>
+          <span>
+            {ticket.mobileNumber} <i>&middot;</i> Pincode {ticket.location.pincode}
+          </span>
+        </div>
+        <span
+          className={`status ${
+            ticket.status === 'RESOLVED'
+              ? 'status-resolved'
+              : ticket.status === 'UNDER_INVESTIGATION'
+              ? 'status-under_investigation'
+              : 'status-pending'
+          }`}
+        >
+          {friendlyStatus(ticket.status)}
+        </span>
+      </div>
+
+      <div className="drawer-tabs">
+        <button className={tab === 'context' ? 'selected' : ''} onClick={() => setTab('context')}>
+          Citizen Context
+        </button>
+        <button className={tab === 'timeline' ? 'selected' : ''} onClick={() => setTab('timeline')}>
+          Case Timeline
+        </button>
+      </div>
+
+      {tab === 'context' ? (
+        <div className="drawer-body">
+          <div className="case-tags">
+            <span className="category-pill">{categoryLabel(ticket.category)}</span>
+            <span className="language-pill">Language: {ticket.detectedLanguage}</span>
+          </div>
+
+          <div className="detail-section">
+            <div className="section-title">
+              <b>Original Voice Complaint</b>
+              <span>Illustrative audio recording</span>
+            </div>
+            <div className="audio-player">
+              <button
+                className="play-button"
+                onClick={() => {
+                  const audio = document.getElementById(`audio-${ticket.id}`) as HTMLAudioElement | null;
+                  if (audio) void audio.play();
+                }}
+              >
+                ▶
+              </button>
+              <div className="audio-track">
+                <div className="audio-wave">
+                  {Array.from({ length: 44 }, (_, i) => (
+                    <i key={i} style={{ height: `${4 + ((i * 13 + 7) % 18)}px` }} />
+                  ))}
+                </div>
+                <div className="audio-meta">
+                  <span>Demo voice clip &middot; 0:03</span>
+                  <span>WAV</span>
+                </div>
+              </div>
+              <audio id={`audio-${ticket.id}`} src={ticket.audioFileUrl} preload="none" />
+            </div>
+          </div>
+
+          <div className="detail-section">
+            <div className="section-title">
+              <b>Complaint Transcript</b>
+              <span>Multilingual transcription &amp; translation</span>
+            </div>
+            <div className="transcript-grid">
+              <div className="transcript-box">
+                <div>
+                  <span>ORIGINAL ({ticket.detectedLanguage.toUpperCase()})</span>
+                  <button title="Copy" onClick={() => void navigator.clipboard?.writeText(ticket.originalRegionalText)}>
+                    Copy
+                  </button>
+                </div>
+                <p>{ticket.originalRegionalText}</p>
+              </div>
+              <div className="transcript-box english">
+                <div>
+                  <span>ENGLISH TRANSLATION</span>
+                  <button title="Copy" onClick={() => void navigator.clipboard?.writeText(ticket.translatedEnglishText)}>
+                    Copy
+                  </button>
+                </div>
+                <p>{ticket.translatedEnglishText}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="detail-section">
+            <div className="section-title">
+              <b>Incident Attributes</b>
+              <span>Category-specific metadata</span>
+            </div>
+            <div className="details-grid">
+              {details.map((d) => (
+                <div className="detail-field" key={d.label}>
+                  <span>{d.label}</span>
+                  <b>{d.value}</b>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="detail-section">
+            <div className="section-title">
+              <b>Reported Location</b>
+              <span>{ticket.wardId.replace('WARD-', 'Ward ')}</span>
+            </div>
+            <div className="location-card">
+              <div>
+                <b>{ticket.location.completeAddress}</b>
+                <span>
+                  {ticket.location.district}, {ticket.location.state} &middot; {ticket.location.pincode}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="timeline-body">
+          <div className="timeline-entry">
+            <span className="timeline-dot blue" />
+            <div>
+              <b>Grievance Received</b>
+              <span>{new Date(ticket.submissionTimestamp).toLocaleString('en-IN')}</span>
+              <p>Submitted via citizen multilingual voice intake in {ticket.detectedLanguage}.</p>
+            </div>
+          </div>
+          <div className="timeline-entry">
+            <span className="timeline-dot amber" />
+            <div>
+              <b>Assigned to {ticket.divisionId.replaceAll('_', ' ')}</b>
+              <span>
+                {ticket.wardId} &middot; {ticket.location.district}
+              </span>
+              <p>Routed automatically based on category and jurisdictional boundary.</p>
+            </div>
+          </div>
+          {ticket.actionTakenReport && (
+            <div className="timeline-entry">
+              <span className="timeline-dot green" />
+              <div>
+                <b>Action Report Filed</b>
+                <span>Recorded official resolution</span>
+                <p>{ticket.actionTakenReport}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <footer className="action-desk">
+        <div className="action-desk-title">
+          <b>Official Action Desk</b>
+          <span>Record resolution findings</span>
+        </div>
+        <label>
+          CASE STATUS
+          <select
+            className="select"
+            value={status}
+            disabled={!canAct}
+            onChange={(e) => setStatus(e.target.value as TicketStatus)}
+          >
+            <option value="PENDING">Pending</option>
+            <option value="UNDER_INVESTIGATION">Under investigation</option>
+            <option value="RESOLVED">Resolved</option>
+          </select>
+        </label>
+        <label>
+          ACTION TAKEN REPORT (ENGLISH)
+          <textarea
+            className="input"
+            rows={3}
+            disabled={!canAct}
+            value={report}
+            placeholder="Document investigation findings, dispatched orders, or citizen resolution..."
+            onChange={(e) => setReport(e.target.value)}
+          />
+        </label>
+        <button
+          className="button button-primary"
+          disabled={!canAct || !report.trim()}
+          onClick={() => onSubmit(ticket.id, status, report.trim())}
+        >
+          Submit Resolution
+        </button>
+      </footer>
+    </aside>
+  );
 }
 
-export default App;
+function AddStaffForm({
+  roles,
+  wards,
+  onClose,
+  onSubmit,
+}: {
+  roles: Role[];
+  wards: Ward[];
+  onClose: () => void;
+  onSubmit: (u: User) => void;
+}) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [roleId, setRoleId] = useState(roles[0]?.id ?? '');
+  const [selectedWards, setSelectedWards] = useState<string[]>([]);
+
+  const pickedRole = roles.find((r) => r.id === roleId);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !email.trim() || !phone.trim() || !pickedRole) return;
+    onSubmit({
+      id: `USER-${Date.now()}`,
+      name: name.trim(),
+      email: email.trim(),
+      mobileNumber: phone.trim(),
+      roleId,
+      assignedWards: pickedRole.scopeType === 'WARD' ? selectedWards : [],
+      isActive: true,
+      avatarInitials: name
+        .trim()
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((v) => v[0])
+        .join('')
+        .toUpperCase(),
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div className="dialog-body">
+        <label className="field">
+          <span className="field-label">OFFICER FULL NAME</span>
+          <input className="input" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Full Name" />
+        </label>
+        <label className="field">
+          <span className="field-label">DEPARTMENT EMAIL</span>
+          <input
+            className="input"
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="officer@mha.gov.in"
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">MOBILE PHONE NUMBER</span>
+          <input
+            className="input"
+            required
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+91 98765 43210"
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">ASSIGNED ROLE</span>
+          <select className="select" value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+            {roles.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name} &middot; {r.scopeType}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {pickedRole?.scopeType === 'WARD' && (
+          <div className="field">
+            <span className="field-label">ASSIGNED WARDS</span>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', maxHeight: '140px', overflow: 'auto' }}>
+              {wards.map((ward) => (
+                <label key={ward.id} style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11px' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedWards.includes(ward.id)}
+                    onChange={(e) =>
+                      setSelectedWards(
+                        e.target.checked ? [...selectedWards, ward.id] : selectedWards.filter((w) => w !== ward.id)
+                      )
+                    }
+                  />
+                  <span>
+                    {ward.id} &middot; {ward.name}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="dialog-actions">
+        <button type="button" className="button button-quiet" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="submit" className="button button-primary">
+          + Add Staff
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function NewRoleForm({
+  wards,
+  onClose,
+  onSubmit,
+}: {
+  wards: Ward[];
+  onClose: () => void;
+  onSubmit: (r: Role) => void;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [scope, setScope] = useState<Role['scopeType']>('WARD');
+  const [division, setDivision] = useState<Role['divisionId']>('CYBER_INFORMATION_SECURITY');
+  const [perms, setPerms] = useState<Permission[]>(['tickets:read']);
+  const [selectedWards, setSelectedWards] = useState<string[]>([]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    onSubmit({
+      id: `ROLE-CUSTOM-${Date.now()}`,
+      name: name.trim(),
+      description: description.trim() || 'Custom department role.',
+      permissions: perms,
+      scopeType: scope,
+      ...(scope === 'DIVISION' ? { divisionId: division } : {}),
+      ...(scope === 'WARD' ? { wardIds: selectedWards } : {}),
+      isSystem: false,
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div className="dialog-body">
+        <label className="field">
+          <span className="field-label">ROLE NAME</span>
+          <input className="input" required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Cyber Response Officer" />
+        </label>
+        <label className="field">
+          <span className="field-label">DESCRIPTION</span>
+          <input
+            className="input"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Operational responsibilities"
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">JURISDICTION SCOPE</span>
+          <select className="select" value={scope} onChange={(e) => setScope(e.target.value as Role['scopeType'])}>
+            <option value="GLOBAL">GLOBAL (National coverage)</option>
+            <option value="DIVISION">DIVISION (Single MHA division)</option>
+            <option value="WARD">WARD (Assigned ward list)</option>
+          </select>
+        </label>
+
+        {scope === 'DIVISION' && (
+          <label className="field">
+            <span className="field-label">MHA DIVISION</span>
+            <select className="select" value={division} onChange={(e) => setDivision(e.target.value as Role['divisionId'])}>
+              {[
+                'CYBER_INFORMATION_SECURITY',
+                'FOREIGNERS',
+                'DISASTER_MANAGEMENT',
+                'UT_ADMINISTRATION',
+                'FREEDOM_FIGHTERS_REHABILITATION',
+                'CENTRAL_ARMED_POLICE_FORCES',
+                'NGO_FCRA',
+                'INTERNAL_SECURITY',
+                'COUNTER_TERRORISM',
+                'LWE_NORTH_EAST',
+                'BORDER_MANAGEMENT',
+                'JUDICIAL',
+                'POLICE',
+                'CENTRE_STATE',
+                'INTERNAL_ADMINISTRATION',
+              ].map((d) => (
+                <option key={d} value={d}>
+                  {d.replaceAll('_', ' ')}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {scope === 'WARD' && (
+          <div className="field">
+            <span className="field-label">WARD JURISDICTION</span>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', maxHeight: '130px', overflow: 'auto' }}>
+              {wards.map((ward) => (
+                <label key={ward.id} style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11px' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedWards.includes(ward.id)}
+                    onChange={(e) =>
+                      setSelectedWards(
+                        e.target.checked ? [...selectedWards, ward.id] : selectedWards.filter((w) => w !== ward.id)
+                      )
+                    }
+                  />
+                  <span>{ward.id} &middot; {ward.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="field">
+          <span className="field-label">PERMISSIONS</span>
+          <div style={{ display: 'grid', gap: '6px' }}>
+            {(
+              [
+                ['tickets:read', 'Read grievance tickets'],
+                ['tickets:resolve', 'Resolve grievances'],
+                ['tickets:reroute', 'Reroute cases'],
+                ['users:manage', 'Manage staff accounts'],
+                ['analytics:view', 'View analytics & audit'],
+              ] as const
+            ).map(([perm, label]) => (
+              <label key={perm} style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '11px' }}>
+                <input
+                  type="checkbox"
+                  checked={perms.includes(perm)}
+                  onChange={() =>
+                    setPerms((curr) => (curr.includes(perm) ? curr.filter((p) => p !== perm) : [...curr, perm]))
+                  }
+                />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="dialog-actions">
+        <button type="button" className="button button-quiet" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="submit" className="button button-primary">
+          Create Role
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function SettingsDialog({
+  onChangePassword,
+}: {
+  onChangePassword: (c: string, n: string) => void;
+}) {
+  const [current, setCurrent] = useState('');
+  const [newPass, setNewPass] = useState('');
+  const [confirm, setConfirm] = useState('');
+
+  return (
+    <div style={{ display: 'grid', gap: '16px' }}>
+      <div>
+        <span className="eyebrow">CHANGE PASSWORD</span>
+        <form
+          style={{ display: 'grid', gap: '10px', marginTop: '8px' }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (newPass === confirm) onChangePassword(current, newPass);
+          }}
+        >
+          <label className="field">
+            <span className="field-label">CURRENT PASSWORD</span>
+            <input
+              className="input"
+              type="password"
+              required
+              value={current}
+              onChange={(e) => setCurrent(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">NEW PASSWORD (MIN 8 CHARACTERS)</span>
+            <input
+              className="input"
+              type="password"
+              required
+              minLength={8}
+              value={newPass}
+              onChange={(e) => setNewPass(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">CONFIRM NEW PASSWORD</span>
+            <input
+              className="input"
+              type="password"
+              required
+              minLength={8}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+            />
+          </label>
+          {confirm && newPass !== confirm && <div className="notice error">Passwords do not match.</div>}
+          <button className="button button-primary" type="submit" disabled={newPass !== confirm || newPass.length < 8}>
+            Update Password
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function MustChangePasswordForm({
+  onSave,
+  onSignOut,
+}: {
+  onSave: (c: string, n: string) => void;
+  onSignOut: () => void;
+}) {
+  const [curr, setCurr] = useState('');
+  const [next, setNext] = useState('');
+  const [conf, setConf] = useState('');
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (next === conf) onSave(curr, next);
+      }}
+      style={{ display: 'grid', gap: '10px' }}
+    >
+      <label className="field">
+        <span className="field-label">TEMPORARY PASSWORD</span>
+        <input className="input" type="password" required value={curr} onChange={(e) => setCurr(e.target.value)} />
+      </label>
+      <label className="field">
+        <span className="field-label">NEW PASSWORD (AT LEAST 8 CHARACTERS)</span>
+        <input
+          className="input"
+          type="password"
+          required
+          minLength={8}
+          value={next}
+          onChange={(e) => setNext(e.target.value)}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">CONFIRM NEW PASSWORD</span>
+        <input
+          className="input"
+          type="password"
+          required
+          minLength={8}
+          value={conf}
+          onChange={(e) => setConf(e.target.value)}
+        />
+      </label>
+      <div className="dialog-actions" style={{ padding: '10px 0 0' }}>
+        <button type="button" className="button button-quiet" onClick={onSignOut}>
+          Sign Out
+        </button>
+        <button type="submit" className="button button-primary" disabled={next !== conf || next.length < 8}>
+          Save New Password
+        </button>
+      </div>
+    </form>
+  );
+}

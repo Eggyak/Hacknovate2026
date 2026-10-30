@@ -91,6 +91,8 @@ export interface User {
   assignedWards: string[];
   isActive: boolean;
   avatarInitials: string;
+  lastSignIn?: string;
+  passwordResetAt?: string;
 }
 
 export interface EvidenceAttachment {

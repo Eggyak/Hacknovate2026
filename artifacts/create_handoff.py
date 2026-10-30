@@ -47,10 +47,10 @@ p.paragraph_format.space_after=Pt(14); p.runs[0].font.size=Pt(12); p.runs[0].fon
 call=doc.add_table(rows=1,cols=1); call.alignment=WD_TABLE_ALIGNMENT.CENTER; c=call.cell(0,0); shade(c,'EEF4F7'); margins(c,170,200,170,200)
 p=c.paragraphs[0]; p.paragraph_format.space_after=Pt(0)
 r=p.add_run('Current result  '); r.bold=True; r.font.color.rgb=RGBColor(31,91,126)
-p.add_run('A runnable React + TypeScript dashboard prototype with simulated role switching, ward/division filtering, editable role and user management, triage filters, ticket details, and browser-persisted status updates. The interface uses mock data and does not connect to MHA systems or perform real translation/notifications.')
+p.add_run('A runnable React + TypeScript dashboard prototype with email-based demo sign-in with role-scoped access, ward/division filtering, editable role and user management, triage filters, ticket details, and browser-persisted status updates. The interface uses mock data and does not connect to MHA systems or perform real translation/notifications.')
 
 doc.add_heading('1  What is in the workspace',level=1)
-rows=[('src/App.tsx','Complete dashboard shell, terminal simulator, scope-aware inbox, details drawer, officer action desk, role creation and user onboarding modals.'),('src/styles.css','Responsive visual system for desktop, tablet, and mobile layouts.'),('src/types/grievance.ts','Strict domain types, including role permissions, scope, ticket base fields, and category-specific discriminated payloads.'),('src/data/mockData.ts','Three wards, four demo roles/users, and eight realistic sample grievances.'),('START_MHA_DASHBOARD.bat','Windows launcher: checks Node, installs dependencies on first run, opens the local app and starts Vite.'),('package.json / vite.config.ts','Vite, React, TypeScript and Tailwind v4 project setup.')]
+rows=[('src/App.tsx','Shared email sign-in, account-specific dashboard, scope-aware inbox, details drawer, officer action desk, role creation and user onboarding modals.'),('src/services/auth.ts','AuthService interface and demo email/password adapter to replace with the backend function.'),('src/styles.css','Responsive visual system for desktop, tablet, and mobile layouts.'),('src/types/grievance.ts','Strict domain types, including role permissions, scope, ticket base fields, and category-specific discriminated payloads.'),('src/data/mockData.ts','Three wards, four demo roles/users, and eight realistic sample grievances.'),('START_MHA_DASHBOARD.bat','Windows launcher: checks Node, installs dependencies on first run, opens the local app and starts Vite.'),('package.json / vite.config.ts','Vite, React, TypeScript and Tailwind v4 project setup.')]
 t=doc.add_table(rows=1,cols=2); t.alignment=WD_TABLE_ALIGNMENT.CENTER; t.style='Light Shading Accent 1'
 t.cell(0,0).text='File'; t.cell(0,1).text='Purpose'
 for c in t.rows[0].cells: shade(c,'173A59')
@@ -62,8 +62,9 @@ for a,b in rows:
     for run in cells[0].paragraphs[0].runs: run.font.name='Consolas'; run.font.size=Pt(8); run.font.color.rgb=RGBColor(43,92,125)
     for run in cells[1].paragraphs[0].runs: run.font.size=Pt(8)
 
+doc.add_page_break()
 doc.add_heading('2  Architecture at a glance',level=1)
-p=doc.add_paragraph('The prototype is a single-page Vite application. The active role and user determine the visible ticket set; localStorage saves demo changes so a judge can switch terminals and revisit the updated queue in the same browser.')
+p=doc.add_paragraph('The prototype is a single-page Vite application served at one shared URL. Sign-in resolves the department email to its assigned user role; that account scope determines which tickets and actions are available. Demo session and workspace changes are stored in this browser.')
 # Editable diagram with native Word table cells
 flow=doc.add_table(rows=3,cols=3); flow.alignment=WD_TABLE_ALIGNMENT.CENTER; flow.autofit=False
 flowPr=flow._tbl.tblPr; flowBorders=OxmlElement('w:tblBorders')
@@ -75,7 +76,7 @@ for row in flow.rows:
 widths=[Inches(2.1),Inches(.55),Inches(3.55)]
 for row in flow.rows:
     for i,c in enumerate(row.cells): c.width=widths[i]; margins(c,85,135,85,135)
-items=[('ROLE SIMULATOR','Super Admin · Cyber desk · Ward 101 · Multi-ward','ACCESS RULES','GLOBAL: all tickets\nDIVISION: matching division\nWARD: assigned ward IDs'),('DEMO STATE','Roles · Users · Wards · Tickets','INBOX','Search · status · division filters\nSLA and status indicators'),('LOCAL STORAGE','Role and user edits\nTicket status and ATR','CASE WORKSPACE','Transcript · incident data · location\nOfficer report · simulated response')]
+items=[('ACCOUNT SIGN IN','Department email resolves the assigned user and role','ACCESS RULES','GLOBAL: all tickets\nDIVISION: matching division\nWARD: assigned ward IDs'),('DEMO STATE','Roles · Users · Wards · Tickets','INBOX','Search · status · division filters\nSLA and status indicators'),('LOCAL STORAGE','Role and user edits\nTicket status and ATR','CASE WORKSPACE','Transcript · incident data · location\nOfficer report · simulated response')]
 for i,(left,leftsub,right,rightsub) in enumerate(items):
     a,b,c=flow.rows[i].cells
     shade(a,'EAF2F7'); shade(b,'F8F9FA'); shade(c,'F5F7F9')
@@ -89,7 +90,7 @@ for item in [
 'Cybercrime Desk Officer: DIVISION scope restricted to Cyber & Information Security.',
 'Ward 101 Inspector: WARD scope restricted to WARD-101.',
 'Multi-Ward Supervisor: WARD scope restricted to WARD-101 and WARD-102.',
-'Use the top-right active terminal selector to switch users instantly. The queue, summary cards, SLA overview, and scope label recalculate from the selected user.',
+'Use Sign out, then sign in with another department email to preview its dashboard at the same URL. The queue, summary cards, SLA overview, and scope label follow the signed-in account.',
 'Open a queue row to view transcript, category payload, location, timeline, and the officer action desk. Status and action report persist locally.',
 'As Super Admin, create roles with GLOBAL, DIVISION, or WARD scope and choose permissions. Onboard users and assign ward IDs for ward-scoped roles.',
 'Role management entry points display a helpful message when the active user lacks users:manage permission.'
@@ -109,7 +110,7 @@ p=doc.add_paragraph('Mock tickets use Delhi wards 101, 102, and 103, Hindi/Tamil
 
 doc.add_heading('6  Prototype boundaries and next engineering work',level=1)
 for item in [
-'Frontend-only demo: there is no API, authentication, server-side authorization, audit store, OTP provider, real SLA scheduler, or production database.',
+'The email/password flow is demo authentication implemented in the browser. It is not secure, does not provide server-side authorization, and must not be used for real accounts. Replace src/services/auth.ts with the team authentication API and enforce identity, permissions, and scope on the server. There is no audit store, OTP provider, real SLA scheduler, or production database.',
 'Audio uses a local illustrative demo clip. Replace audioFileUrl with each real intake recording URL when the citizen frontend/backend is integrated.',
 'Translation and citizen notifications are simulated. Connect approved translation, speech, and notification services before representing them as live capabilities.',
 'Browser localStorage is for a single-device demo only; it is not secure, multi-user, or suitable for sensitive production grievance data.',
@@ -118,7 +119,7 @@ for item in [
 ]: bullet(item)
 
 doc.add_heading('7  Files to continue with',level=1)
-for item in ['Data shape or categories: edit src/types/grievance.ts, then update src/data/mockData.ts.','Workspace interactions and UI: edit src/App.tsx.','Visual styling and responsive breakpoints: edit src/styles.css.','Run the prototype: START_MHA_DASHBOARD.bat.','Confirm the code compiles: npm run build.']: bullet(item)
+for item in ['Data shape or categories: edit src/types/grievance.ts, then update src/data/mockData.ts.','Workspace interactions and UI: edit src/App.tsx. Replace the demo auth adapter in src/services/auth.ts with the team login function.','Visual styling and responsive breakpoints: edit src/styles.css.','Run the prototype: START_MHA_DASHBOARD.bat.','Confirm the code compiles: npm run build.']: bullet(item)
 
 # properties
 doc.core_properties.title='MHA Grievance Department Workspace Handoff'
@@ -126,6 +127,7 @@ doc.core_properties.subject='Editable implementation reference for the Hacknovat
 doc.core_properties.author='Hacknovate 2026 project team'
 doc.save(out)
 print(out)
+
 
 
 

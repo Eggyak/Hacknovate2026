@@ -21,8 +21,8 @@ if not exist "node_modules" (
   )
 )
 
-echo Starting the MHA Grievance Department Workspace...
+echo Starting the MHA dashboard and local SQLite API...
 start "MHA Dashboard" http://localhost:5173
-call npm run dev -- --host 127.0.0.1
+call npm run start:local
 pause
 
