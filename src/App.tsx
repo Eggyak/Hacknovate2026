@@ -1354,7 +1354,7 @@ export default function App() {
         </div>
       )}
       {modal === 'user' && (
-        <div className="dialog-backdrop" onClick={() => setModal(null)}>
+        <div className="dialog-backdrop">
           <div className="dialog" onClick={(e) => e.stopPropagation()}>
             <div className="dialog-head">
               <h2>Onboard Staff Member</h2>
@@ -2030,6 +2030,8 @@ function AddStaffForm({
             className="input"
             type="email"
             required
+            pattern="[^@\s]+@[^@\s]+\.[^@\s]+"
+            title="Enter a complete email address, such as officer@mha.gov.in"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="officer@mha.gov.in"
