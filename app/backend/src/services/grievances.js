@@ -405,7 +405,12 @@ export async function statsForCitizen(citizenId) {
        COUNT(*)::int AS total,
        COUNT(*) FILTER (WHERE status IN ('submitted','under_review','in_progress'))::int AS active,
        COUNT(*) FILTER (WHERE status IN ('resolved','closed'))::int AS resolved,
-       COUNT(*) FILTER (WHERE status NOT IN ('resolved','closed','rejected') AND sla_deadline < NOW())::int AS breached
+       COUNT(*) FILTER (WHERE status NOT IN ('resolved','closed','rejected') AND sla_deadline < NOW())::int AS breached,
+       -- Whether a complaint has actually reached a department desk is a
+       -- different fact from whether we accepted it, and the citizen is
+       -- entitled to see which of the two has happened.
+       COUNT(*) FILTER (WHERE govt_synced_at IS NOT NULL)::int AS forwarded,
+       COUNT(*) FILTER (WHERE govt_synced_at IS NULL)::int AS awaiting_forward
      FROM grievances WHERE citizen_id = $1`,
     [citizenId],
   );

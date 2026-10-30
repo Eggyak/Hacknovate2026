@@ -686,6 +686,42 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 .speaktoggle input { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
 .speaktoggle:has(input:checked) { border-color: var(--success); background: var(--success-soft); color: #166534; }
 
+/* ---------- Case list on the dashboard ---------- */
+
+.caselist { display: flex; flex-direction: column; gap: 8px; }
+.caserow {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-4);
+  padding: 13px 15px; border: 1px solid var(--line); border-radius: var(--r);
+  background: #fff; cursor: pointer;
+}
+.caserow:hover { background: var(--surface-2); border-color: var(--line-2); }
+.casemain { min-width: 0; flex: 1; }
+.casesubject {
+  font-size: 0.9375rem; font-weight: 600; margin: 5px 0 6px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/*
+ * Both references, side by side.
+ *
+ * Ours is what the citizen was handed when they filed; the department's is
+ * what an officer will quote back at them. Showing one without the other
+ * leaves whichever is missing impossible to look up.
+ */
+.trackline {
+  display: flex; flex-wrap: wrap; gap: 6px var(--sp-4);
+  font-size: 0.75rem; color: var(--ink-3); align-items: center;
+}
+.trackline .tk { text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+.trackline .ref { font-size: 0.75rem; padding: 2px 7px; }
+
+.caseside { text-align: end; flex: none; min-width: 130px; }
+.caseside .sla-bar { margin-top: 5px; }
+@media (max-width: 640px) {
+  .caserow { flex-direction: column; }
+  .caseside { text-align: start; min-width: 0; width: 100%; }
+}
+
 /* ---------- Chat history ---------- */
 
 .chatlist { display: flex; flex-direction: column; gap: 6px; }

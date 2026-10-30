@@ -18,7 +18,7 @@ import { probe as speechProbe } from './services/azureSpeech.js';
 import { probe as translateProbe } from './services/translate.js';
 import { snapshot as mistralSnapshot } from './services/mistral.js';
 import { purgeExpired } from './services/otp.js';
-import { retryPending, configured as govtConfigured } from './services/govtIntake.js';
+import { retryPending, refreshStatuses, configured as govtConfigured } from './services/govtIntake.js';
 import { LANGUAGES } from './data/languages.js';
 import { DIVISIONS } from './data/divisions.js';
 
@@ -144,6 +144,12 @@ async function start() {
       retryPending().then((r) => {
         if (r.attempted > 0) console.log(`[govt] retried ${r.attempted}, forwarded ${r.forwarded}`);
       }).catch((e) => console.error('[govt] retry sweep failed', e.message));
+
+      // And reflect whatever the department has done since. Their workspace
+      // owns the lifecycle once a case reaches a desk; we only mirror it.
+      refreshStatuses().then((r) => {
+        if (r.changed > 0) console.log(`[govt] ${r.changed} case(s) moved`);
+      }).catch((e) => console.error('[govt] status sweep failed', e.message));
     }, env.govt.syncIntervalMs).unref();
   }
 

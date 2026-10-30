@@ -107,6 +107,15 @@ grievanceRouter.get('/', async (req, res, next) => {
         ...g,
         division: divisionById(g.division_id),
         sla: slaFor(g),
+        // Two references, deliberately both: ours is what the citizen was
+        // given the moment they filed, theirs is what a department officer
+        // will quote back. Showing only one makes the other unfindable.
+        tracking: {
+          reference: g.reference_id,
+          departmentCase: g.govt_grievance_id || null,
+          forwarded: Boolean(g.govt_synced_at),
+          pendingForward: !g.govt_synced_at,
+        },
       })),
     });
   } catch (err) {

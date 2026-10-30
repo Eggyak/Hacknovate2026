@@ -47,6 +47,8 @@ const state = {
   health: null,
   conversation: null,
   activeConversationId: null,
+  recent: [],
+  recentExpanded: false,
   lastPipeline: null,
   lidCandidates: [],
 };
@@ -1119,22 +1121,34 @@ async function verifyOtp(e) {
   }
 }
 
-/** Dashboard. Counters are computed from this citizen's own records. */
+/**
+ * Dashboard. Every number and every row is this citizen's own record.
+ *
+ * The recent list shows a few cases and expands on request rather than
+ * paging: someone checking on a complaint wants to see it, not to learn a
+ * navigation scheme. Each row carries BOTH references - ours, which they were
+ * given the moment they filed, and the department's, which an officer will
+ * quote back at them. Showing only one of the two makes the other
+ * unfindable.
+ */
+const RECENT_COLLAPSED = 4;
+
 async function viewDashboard() {
   setView('<div class="center" style="padding:60px 0"><span class="spin dark"></span></div>');
 
   const [stats, list] = await Promise.all([
     api.get('/grievances/stats'),
-    api.get('/grievances?limit=5'),
+    api.get('/grievances?limit=50'),
   ]);
 
-  const recent = list.grievances;
+  state.recent = list.grievances;
+  state.recentExpanded = false;
   const c = state.citizen;
 
   setView(`
     <div class="row between wrap mb-4">
       <div>
-        <h1>${state.citizen.full_name ? `Welcome, ${esc(state.citizen.full_name)}` : 'Your grievances'}</h1>
+        <h1>${c.full_name ? `Welcome, ${esc(c.full_name)}` : 'Your grievances'}</h1>
         <p class="muted small" style="margin:0">Speak or type in any of ${state.health.counts.languages} languages.</p>
       </div>
       <a class="btn primary" href="#/new">Register a grievance</a>
@@ -1146,6 +1160,12 @@ async function viewDashboard() {
       <div class="stat"><div class="n tnum">${stats.resolved}</div><div class="k">Resolved</div></div>
       <div class="stat"><div class="n tnum" style="color:${stats.breached ? 'var(--danger)' : 'inherit'}">${stats.breached}</div><div class="k">Past due</div></div>
     </div>
+
+    ${Number(stats.awaiting_forward) > 0 ? `
+      <div class="notice warn mb-4">
+        <span>${stats.awaiting_forward} complaint(s) are filed with us but have not reached a
+        department desk yet. They are retried automatically; your docket number is unaffected.</span>
+      </div>` : ''}
 
     <div class="card mb-4">
       <div class="row between wrap mb-3">
@@ -1185,34 +1205,93 @@ async function viewDashboard() {
     </div>
 
     <div class="card">
-      <div class="row between mb-3">
-        <h2>Recent</h2>
-        ${recent.length ? '<a class="small" href="#/grievances">View all</a>' : ''}
+      <div class="row between wrap mb-3">
+        <h2>Recent cases</h2>
+        ${state.recent.length ? '<a class="small" href="#/grievances">Open full list</a>' : ''}
       </div>
-      ${recent.length === 0 ? `
-        <div class="center" style="padding:36px 0">
-          <p class="muted">You have not filed any grievance yet.</p>
-          <a class="btn primary mt-2" href="#/new">Register your first grievance</a>
-        </div>` : `
-        <table class="data">
-          <thead><tr><th>Docket</th><th>Department</th><th>Status</th><th>Due</th></tr></thead>
-          <tbody>
-            ${recent.map((g) => `
-              <tr class="row" data-ref="${esc(g.reference_id)}">
-                <td><span class="ref" data-no-i18n>${esc(g.reference_id)}</span></td>
-                <td>${esc(g.division?.name || '—')}</td>
-                <td>${statusBadge(g.status)}</td>
-                <td class="num small ${g.sla.breached ? '' : 'muted'}" ${g.sla.breached ? 'style="color:var(--danger);font-weight:700"' : ''}>
-                  ${g.sla.breached ? 'Overdue' : `${g.sla.daysLeft}d`}
-                </td>
-              </tr>`).join('')}
-          </tbody>
-        </table>`}
+      <div id="recentBody"></div>
     </div>`);
 
-  $$('tr.row').forEach((tr) => {
-    tr.onclick = () => { location.hash = `#/g/${tr.dataset.ref}`; };
+  renderRecent();
+}
+
+function renderRecent() {
+  const host = $('#recentBody');
+  if (!host) return;
+
+  const all = state.recent || [];
+  if (all.length === 0) {
+    host.innerHTML = `
+      <div class="center" style="padding:32px 0">
+        <p class="muted">You have not filed any grievance yet.</p>
+        <a class="btn primary mt-2" href="#/new">Register your first grievance</a>
+      </div>`;
+    return;
+  }
+
+  const shown = state.recentExpanded ? all : all.slice(0, RECENT_COLLAPSED);
+  const hidden = all.length - shown.length;
+
+  host.innerHTML = `
+    <div class="caselist">
+      ${shown.map((g) => {
+        const t = g.tracking || {};
+        const pct = Math.max(0, Math.min(100, ((g.sla.days - g.sla.daysLeft) / g.sla.days) * 100));
+        return `
+        <div class="caserow" data-ref="${esc(g.reference_id)}">
+          <div class="casemain">
+            <div class="row wrap" style="gap:8px;align-items:center">
+              ${statusBadge(g.status)}
+              ${g.priority === 'high' ? '<span class="badge urgent">Urgent</span>' : ''}
+              <span class="small muted">${esc(g.division?.name || '-')}</span>
+            </div>
+            <div class="casesubject">${esc(g.subject || g.original_text || '').slice(0, 110)}</div>
+            <div class="trackline">
+              <span title="Your reference, issued when you filed">
+                <span class="tk">Tracking</span> <b class="ref" data-no-i18n>${esc(t.reference || g.reference_id)}</b>
+              </span>
+              ${t.departmentCase
+                ? `<span title="The department's own case number">
+                     <span class="tk">Department case</span> <b class="ref" data-no-i18n>${esc(t.departmentCase)}</b>
+                   </span>`
+                : '<span class="badge pending">Reaching the department</span>'}
+            </div>
+          </div>
+          <div class="caseside">
+            <div class="small muted">Filed ${fmtDate(g.submitted_at)}</div>
+            <div class="small ${g.sla.breached ? '' : 'muted'}"
+                 ${g.sla.breached ? 'style="color:var(--danger);font-weight:700"' : ''}>
+              ${g.sla.breached ? 'Overdue' : `${g.sla.daysLeft} days left`}
+            </div>
+            <div class="sla-bar ${g.sla.breached ? 'bad' : (g.sla.daysLeft <= 5 ? 'warn' : '')}">
+              <i style="width:${pct}%"></i>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    ${all.length > RECENT_COLLAPSED ? `
+      <div class="center mt-3">
+        <button class="btn ghost" id="toggleRecent">
+          ${state.recentExpanded
+            ? 'See less'
+            : `See ${hidden} more`}
+        </button>
+      </div>` : ''}`;
+
+  $$('[data-ref]', host).forEach((row) => {
+    row.onclick = () => { location.hash = `#/g/${row.dataset.ref}`; };
   });
+
+  const toggle = $('#toggleRecent');
+  if (toggle) {
+    toggle.onclick = () => {
+      state.recentExpanded = !state.recentExpanded;
+      renderRecent();
+      localise();
+    };
+  }
 }
 
 /* ---------- the interview ---------- */

@@ -443,6 +443,90 @@ export async function retryPending(limit = 10) {
   return { attempted: r.rows.length, forwarded: ok };
 }
 
+/**
+ * Map their status onto ours.
+ *
+ * Their workspace owns the lifecycle once a case reaches it, so this is a
+ * one-way translation: we never push a status back, we only reflect theirs.
+ */
+const STATUS_MAP = {
+  PENDING: 'submitted',
+  UNDER_INVESTIGATION: 'in_progress',
+  RESOLVED: 'resolved',
+};
+
+/**
+ * Refresh what the department has done with cases we forwarded.
+ *
+ * This is what makes the citizen's tracking page true rather than a record of
+ * the moment they filed. Only cases that actually reached a desk are polled,
+ * oldest-updated first, and a status change is written to the timeline so the
+ * citizen can see when it moved and what was said.
+ */
+export async function refreshStatuses(limit = 25) {
+  if (!configured()) return { checked: 0 };
+
+  const r = await query(
+    `SELECT id, reference_id, govt_grievance_id, status, govt_status
+       FROM grievances
+      WHERE govt_grievance_id IS NOT NULL
+        AND status NOT IN ('closed','rejected')
+      ORDER BY COALESCE(govt_status_at, submitted_at)
+      LIMIT $1`,
+    [limit],
+  );
+
+  let changed = 0;
+  for (const row of r.rows) {
+    const remote = await fetchStatus(row.govt_grievance_id);
+    if (!remote) continue;
+
+    const mapped = STATUS_MAP[remote.status] || row.status;
+    const movedStatus = mapped !== row.status;
+    const movedRemote = remote.status !== row.govt_status;
+    if (!movedStatus && !movedRemote) continue;
+
+    await query(
+      `UPDATE grievances
+          SET status = $2,
+              govt_status = $3,
+              govt_report = $4,
+              govt_status_at = NOW(),
+              closed_at = CASE WHEN $2 IN ('resolved','closed') THEN COALESCE(closed_at, NOW()) ELSE closed_at END,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [row.id, mapped, remote.status, remote.actionTakenReport || null],
+    );
+
+    if (movedStatus) {
+      await query(
+        `INSERT INTO grievance_events (grievance_id, status, note, actor)
+         VALUES ($1, $2, $3, 'department')`,
+        [
+          row.id,
+          mapped,
+          remote.actionTakenReport
+            ? `Department update: ${String(remote.actionTakenReport).slice(0, 400)}`
+            : `The department marked this ${String(remote.status).toLowerCase().replace(/_/g, ' ')}.`,
+        ],
+      );
+
+      await query(
+        `INSERT INTO notifications (citizen_id, grievance_id, title, body)
+         SELECT citizen_id, id, $2, $3 FROM grievances WHERE id = $1`,
+        [
+          row.id,
+          `${row.reference_id} is now ${mapped.replace(/_/g, ' ')}`,
+          remote.actionTakenReport || 'The handling department has updated your grievance.',
+        ],
+      );
+    }
+    changed += 1;
+  }
+
+  return { checked: r.rows.length, changed };
+}
+
 /** Ask the department what has happened to a case since. */
 export async function fetchStatus(govtGrievanceId) {
   if (!configured() || !govtGrievanceId) return null;
