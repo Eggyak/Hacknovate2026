@@ -505,12 +505,19 @@ export async function refreshStatuses(limit = 25) {
     if (!movedStatus && !movedRemote) continue;
 
     await query(
+      /*
+       * $2 is cast at every use. It appears both as a column value and
+       * inside a CASE comparison, and without the casts Postgres infers a
+       * different type for each and refuses the statement outright with
+       * "inconsistent types deduced for parameter $2".
+       */
       `UPDATE grievances
-          SET status = $2,
-              govt_status = $3,
-              govt_report = $4,
+          SET status = $2::text,
+              govt_status = $3::text,
+              govt_report = $4::text,
               govt_status_at = NOW(),
-              closed_at = CASE WHEN $2 IN ('resolved','closed') THEN COALESCE(closed_at, NOW()) ELSE closed_at END,
+              closed_at = CASE WHEN $2::text IN ('resolved','closed')
+                               THEN COALESCE(closed_at, NOW()) ELSE closed_at END,
               updated_at = NOW()
         WHERE id = $1`,
       [row.id, mapped, remote.status, remote.actionTakenReport || null],
