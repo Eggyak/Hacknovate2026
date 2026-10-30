@@ -503,6 +503,114 @@ async function runInterfaceTranslation() {
   await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
 }
 
+/**
+ * The speech configuration the browser is actually handed.
+ *
+ * Azure transcribes Odia and Assamese but refuses to IDENTIFY them, closing
+ * the socket with InvalidArgument the moment either is offered as a
+ * candidate - which is what made the microphone fail outright. Determined by
+ * probing the service (test/probe-lid.js); there is no published list.
+ */
+async function runSpeechConfig() {
+  console.log('\n--- speech configuration ---');
+  const { citizen, token } = await makeCitizen('9000000051');
+  const api = client(token);
+
+  const def = await api('/speech/token');
+  const cands = def.data.candidates || [];
+  check('candidates are offered', cands.length > 0, cands.join(','));
+  check('no locale Azure refuses to identify is offered',
+    !cands.includes('or-IN') && !cands.includes('as-IN'), cands.join(','));
+  check('within Azure\'s limit of 10', cands.length <= 10, String(cands.length));
+  check('12 of 14 languages are identifiable', def.data.identifiable === 12,
+    String(def.data.identifiable));
+
+  // A citizen who chose Odia gets direct recognition rather than a refusal.
+  for (const code of ['or', 'as']) {
+    const r = await api(`/speech/token?language=${code}`);
+    check(`${code} is transcribed directly instead of identified`,
+      r.data.forceLocale === `${code}-IN`, String(r.data.forceLocale));
+    check(`${code} is still excluded from the candidate list`,
+      !(r.data.candidates || []).includes(`${code}-IN`), (r.data.candidates || []).join(','));
+  }
+
+  const hi = await api('/speech/token?language=hi');
+  check('an identifiable language is not pinned', hi.data.forceLocale === null,
+    String(hi.data.forceLocale));
+  check('and it is among the candidates', (hi.data.candidates || []).includes('hi-IN'));
+
+  await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
+}
+
+/**
+ * The whole interview, driven as a voice complaint from start to docket.
+ *
+ * Every turn carries the locale Azure would have reported, so this exercises
+ * the path a speaking citizen actually takes rather than the typed one.
+ */
+async function runFullVoiceFlow() {
+  console.log('\n--- full voice flow, end to end ---');
+  const { citizen, token } = await makeCitizen('9000000052');
+  const api = client(token);
+
+  const start = await api('/chat/start', { method: 'POST', body: { language: 'en' } });
+  const id = start.data.conversationId;
+  check('interview opens', start.status === 200 && Boolean(id));
+
+  const spoke = (text, locale) => api(`/chat/${id}/message`, {
+    method: 'POST',
+    body: { text, inputMode: 'voice', spoken: { locale, confidence: 0.91, candidates: ['hi-IN', 'en-IN'] } },
+  });
+
+  const narrative = await spoke(
+    'मेरे बैंक खाते से ओटीपी के जरिए पचास हजार रुपये की साइबर धोखाधड़ी हुई है',
+    'hi-IN',
+  );
+  check('spoken language is taken from Azure', narrative.data.language === 'hi',
+    narrative.data.language);
+  check('routed from speech', narrative.data.draft?.divisionId === 'cyber',
+    String(narrative.data.draft?.divisionId));
+  check('the trace names Azure as the identifier',
+    (narrative.data.pipeline?.steps || []).some((s) => s.provider === 'azure-speech'));
+
+  await api(`/chat/${id}/division`, { method: 'POST', body: { divisionId: 'cyber' } });
+
+  for (const a of ['UTR900000000001', '50000', '2026-10-30 10:00', 'WhatsApp']) {
+    await spoke(a, 'hi-IN');
+  }
+  await spoke('751001', 'hi-IN');
+  await spoke('Khordha', 'hi-IN');
+  await spoke('Plot 14, Unit 3, Bhubaneswar', 'hi-IN');
+  await api(`/chat/${id}/draft`, { method: 'PATCH', body: { skipLocationPin: true } });
+  await spoke('Voice Test Citizen', 'hi-IN');
+  await spoke('Male', 'hi-IN');
+  await api(`/chat/${id}/declaration`, { method: 'POST', body: { accepted: true } });
+
+  const done = await api(`/chat/${id}/submit`, { method: 'POST', body: {} });
+  check('voice complaint is registered', done.status === 201, JSON.stringify(done.data).slice(0, 120));
+
+  const g = (await query('SELECT * FROM grievances WHERE reference_id = $1',
+    [done.data.reference])).rows[0];
+  check('recorded as a voice filing', g?.input_mode === 'voice', g?.input_mode);
+  check('PIN resolved to Odisha', g?.state === 'Odisha', g?.state);
+  check('district captured', g?.district === 'Khordha', g?.district);
+  check('English rendering produced', Boolean(g?.translated_text),
+    (g?.translated_text || '').slice(0, 50));
+  check('spoken reply is composed', Boolean(done.data.spoken), (done.data.spoken || '').slice(0, 40));
+
+  // And that reply can actually be synthesised in the language it is in.
+  const res = await fetch(`${BASE}/api/speech/speak`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: done.data.spoken, language: 'hi' }),
+  });
+  const audio = Buffer.from(await res.arrayBuffer());
+  check('the confirmation can be spoken aloud', res.status === 200 && audio.length > 2000,
+    `${audio.length} bytes`);
+
+  await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
+}
+
 async function main() {
   console.log(`Testing ${BASE}`);
   try {
@@ -515,6 +623,8 @@ async function main() {
     await runLanguageFollowing();
     await runTranslation();
     await runInterfaceTranslation();
+    await runSpeechConfig();
+    await runFullVoiceFlow();
   } catch (err) {
     console.error('\nUNCAUGHT', err);
     failed += 1;

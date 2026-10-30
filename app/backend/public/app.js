@@ -432,18 +432,34 @@ const speech = {
   async start({ onPartial, onFinal, onError }) {
     if (!window.SpeechSDK) throw new Error('Speech SDK did not load.');
 
-    const { token, region, candidates } = await api.get(
-      `/speech/token${state.conversation ? `?conversationId=${state.conversation.conversationId}` : ''}`,
+    const lang = state.conversation?.language || state.citizen?.preferred_language || '';
+    const { token, region, candidates, forceLocale } = await api.get(
+      `/speech/token?language=${encodeURIComponent(lang)}`
+      + (state.conversation ? `&conversationId=${state.conversation.conversationId}` : ''),
     );
     state.lidCandidates = candidates;
 
     const SDK = window.SpeechSDK;
     const cfg = SDK.SpeechConfig.fromAuthorizationToken(token, region);
-    cfg.setProperty(SDK.PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
 
-    const auto = SDK.AutoDetectSourceLanguageConfig.fromLanguages(candidates);
     const audio = SDK.AudioConfig.fromDefaultMicrophoneInput();
-    const rec = SDK.SpeechRecognizer.FromConfig(cfg, auto, audio);
+    let rec;
+
+    if (forceLocale) {
+      /*
+       * Azure will transcribe this language but will not identify it. Asking
+       * it to do so closes the socket with InvalidArgument before a word is
+       * heard - which is what made the microphone fail outright for Odia.
+       * Recognise it directly instead: detection is lost, the microphone is
+       * not.
+       */
+      cfg.speechRecognitionLanguage = forceLocale;
+      rec = new SDK.SpeechRecognizer(cfg, audio);
+    } else {
+      cfg.setProperty(SDK.PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
+      const auto = SDK.AutoDetectSourceLanguageConfig.fromLanguages(candidates);
+      rec = SDK.SpeechRecognizer.FromConfig(cfg, auto, audio);
+    }
 
     rec.recognizing = (_s, e) => {
       if (e.result.text) onPartial(e.result.text);
@@ -451,17 +467,31 @@ const speech = {
 
     rec.recognized = (_s, e) => {
       if (e.result.reason !== SDK.ResultReason.RecognizedSpeech || !e.result.text) return;
-      const detected = SDK.AutoDetectSourceLanguageResult.fromResult(e.result);
-      onFinal({
-        text: e.result.text,
-        locale: detected?.language || null,
-        candidates,
-      });
+      let locale = forceLocale || null;
+      if (!locale) {
+        try {
+          locale = SDK.AutoDetectSourceLanguageResult.fromResult(e.result)?.language || null;
+        } catch {
+          locale = null;
+        }
+      }
+      onFinal({ text: e.result.text, locale, candidates });
     };
 
     rec.canceled = (_s, e) => {
       this.stop();
-      onError(new Error(e.errorDetails || 'Recognition was cancelled.'));
+      const detail = e.errorDetails || '';
+      const refused = detail.match(/doesn't support ([a-z]{2}-[a-z]{2})/i);
+      if (refused) {
+        // Should not happen now that the server filters the list, but if
+        // Azure changes its mind about a locale the citizen deserves a
+        // sentence they can act on rather than a websocket error code.
+        onError(new Error(
+          `Voice input cannot auto-detect ${refused[1]}. Choose that language in the header and try again.`,
+        ));
+        return;
+      }
+      onError(new Error(detail || 'Recognition was cancelled.'));
     };
 
     this.recognizer = rec;

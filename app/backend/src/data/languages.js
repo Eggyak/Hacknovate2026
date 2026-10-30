@@ -64,12 +64,12 @@ export const LANGUAGES = [
   },
   {
     code: 'or', locale: 'or-IN', name: 'Odia', native: 'ଓଡ଼ିଆ',
-    script: 'Odia', dir: 'ltr',
+    script: 'Odia', dir: 'ltr', lid: false,
     voice: { female: 'or-IN-SubhasiniNeural', male: 'or-IN-SukantNeural' },
   },
   {
     code: 'as', locale: 'as-IN', name: 'Assamese', native: 'অসমীয়া',
-    script: 'Bengali', dir: 'ltr',
+    script: 'Bengali', dir: 'ltr', lid: false,
     voice: { female: 'as-IN-YashicaNeural', male: 'as-IN-PriyomNeural' },
   },
   {
@@ -89,6 +89,18 @@ export const BY_LOCALE = new Map(LANGUAGES.map((l) => [l.locale, l]));
 
 export function byCode(code) {
   return BY_CODE.get(String(code || '').toLowerCase().split('-')[0]) || null;
+}
+
+/**
+ * When identification is impossible, recognise the chosen language outright.
+ *
+ * Returns a locale to pin recognition to, or null to let identification run.
+ * This is what keeps Odia and Assamese usable by voice at all: they lose
+ * automatic detection, not the microphone.
+ */
+export function speechLocaleFor(code) {
+  const lang = byCode(code);
+  return lang && !lidSupported(lang) ? lang.locale : null;
 }
 
 export function byLocale(locale) {
@@ -111,13 +123,31 @@ export function byLocale(locale) {
  */
 export const LID_MAX_CANDIDATES = 10;
 
+/**
+ * Azure transcribes these two perfectly well, but refuses to IDENTIFY them:
+ * offering or-IN or as-IN as a candidate is answered with InvalidArgument and
+ * the websocket is closed before a word is heard. Determined by probing the
+ * service directly (test/probe-lid.js) - there is no published list, and the
+ * batch-transcription locale list includes both, so it cannot be trusted for
+ * this.
+ *
+ * They are therefore excluded from identification and recognised explicitly
+ * instead: a citizen who has chosen Odia is transcribed AS Odia rather than
+ * having their language guessed. See speechLocaleFor().
+ */
+export function lidSupported(lang) {
+  return lang ? lang.lid !== false : false;
+}
+
 const POPULARITY = ['hi', 'bn', 'mr', 'te', 'ta', 'gu', 'ur', 'kn', 'or', 'ml', 'pa', 'as', 'ne'];
 
 export function buildLidCandidates({ preferred = null, stateLanguages = [] } = {}) {
   const out = [];
   const push = (code) => {
     const lang = byCode(code);
-    if (lang && !out.includes(lang.locale) && out.length < LID_MAX_CANDIDATES) {
+    // A locale Azure will not identify must never reach the candidate list:
+    // one of them refuses the whole session, not just itself.
+    if (lang && lidSupported(lang) && !out.includes(lang.locale) && out.length < LID_MAX_CANDIDATES) {
       out.push(lang.locale);
     }
   };

@@ -14,7 +14,7 @@ import rateLimit from 'express-rate-limit';
 import { requireCitizen } from '../lib/auth.js';
 import { issueToken, synthesize, transcribeBuffer, SpeechUnavailable } from '../services/azureSpeech.js';
 import { getConversation, lidCandidatesFor } from '../services/conversation.js';
-import { LANGUAGES, byCode, buildLidCandidates } from '../data/languages.js';
+import { LANGUAGES, byCode, buildLidCandidates, speechLocaleFor, lidSupported } from '../data/languages.js';
 import { languagesForPincode } from '../data/states.js';
 import { env } from '../lib/env.js';
 
@@ -54,12 +54,26 @@ speechRouter.get('/token', requireCitizen, async (req, res, next) => {
       });
     }
 
+    /*
+     * Azure refuses to IDENTIFY some locales it transcribes perfectly well -
+     * offering or-IN or as-IN as a candidate closes the socket with
+     * InvalidArgument before a word is heard. Those languages are recognised
+     * explicitly instead, so a citizen who has chosen Odia is transcribed AS
+     * Odia rather than having it guessed.
+     */
+    const chosen = req.query.language || req.citizen.preferred_language;
+    const forceLocale = speechLocaleFor(chosen);
+
     return res.json({
       token,
       region,
       candidates,
+      forceLocale,
       supported: LANGUAGES.length,
-      note: `Azure evaluates up to ${candidates.length} candidate locales per utterance; ${LANGUAGES.length} languages are supported overall.`,
+      identifiable: LANGUAGES.filter(lidSupported).length,
+      note: forceLocale
+        ? `${byCode(chosen).name} is transcribed directly; Azure cannot identify it automatically.`
+        : `Azure evaluates up to ${candidates.length} candidate locales per utterance; ${LANGUAGES.length} languages are supported overall.`,
     });
   } catch (err) {
     try {
