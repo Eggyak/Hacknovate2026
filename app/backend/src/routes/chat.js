@@ -24,7 +24,8 @@ import {
   linkGrievance,
 } from '../services/conversation.js';
 import { createGrievance, ValidationError, slaFor } from '../services/grievances.js';
-import { divisionById } from '../data/divisions.js';
+import { DIVISIONS, divisionById } from '../data/divisions.js';
+import { warmDivisionNames } from '../services/translate.js';
 import { t } from '../data/phrases.js';
 import { query } from '../lib/db.js';
 import * as mistral from '../services/mistral.js';
@@ -62,6 +63,9 @@ chatRouter.post('/start', async (req, res, next) => {
   try {
     const language = req.body?.language || req.citizen.preferred_language || 'en';
     const conversation = await startConversation(req.citizen.id, language);
+    // Warm this language's division names while the citizen types their
+    // complaint, so the routing reply does not have to wait for them.
+    warmDivisionNames(language, DIVISIONS).catch(() => {});
     const reply = prompt(conversation, req.citizen);
     return res.json(view(conversation, req.citizen, reply));
   } catch (err) {

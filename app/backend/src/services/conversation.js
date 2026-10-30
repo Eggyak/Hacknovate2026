@@ -16,10 +16,10 @@
 import { query } from '../lib/db.js';
 import { detectLanguage } from './languageDetect.js';
 import { classify } from './classifier.js';
-import { toEnglish } from './translate.js';
+import { toEnglish, warmDivisionNames, divisionNameIn } from './translate.js';
 import * as mistral from './mistral.js';
 import { env } from '../lib/env.js';
-import { divisionById, fieldsFor } from '../data/divisions.js';
+import { DIVISIONS, divisionById, fieldsFor } from '../data/divisions.js';
 import { byCode, buildLidCandidates } from '../data/languages.js';
 import { languagesForPincode, stateForPincode, isValidPincode } from '../data/states.js';
 import { t } from '../data/phrases.js';
@@ -173,7 +173,7 @@ export function prompt(conversation, citizen) {
       const d = divisionById(c.divisionId);
       return {
         step,
-        text: t('routed_to', language, { division: d.name }),
+        text: t('routed_to', language, { division: divisionNameIn(d.id, language, d.name) }),
         input: { kind: 'confirm_division', divisionId: d.id },
       };
     }
@@ -297,6 +297,12 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
         heldBack: enoughToRead ? 'confidence below threshold' : `only ${detected.letters || 0} letters`,
       };
     }
+  }
+
+  // Fetch this language's division names once, in the background. The reply
+  // being composed now may still say the English name; the next one will not.
+  if (language && language !== 'en') {
+    warmDivisionNames(language, DIVISIONS).catch(() => {});
   }
 
   if (identification) {

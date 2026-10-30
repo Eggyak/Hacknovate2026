@@ -454,6 +454,14 @@ async function runTranslation() {
 
   const one = await toEnglish('ਮੇਰੀ ਸ਼ਿਕਾਇਤ ਦਰਜ ਕਰੋ', { from: 'pa' });
   check('it reports itself as the provider', (one.provider || '').includes('azure'), one.provider);
+
+  // The division name is the word the citizen has to agree with, so it must
+  // not be the one word left in English.
+  const { warmDivisionNames, divisionNameIn } = await import('../src/services/translate.js');
+  const { DIVISIONS } = await import('../src/data/divisions.js');
+  await warmDivisionNames('pa', DIVISIONS);
+  const localised = divisionNameIn('cyber', 'pa', 'Cyber & Information Security');
+  check('division names are localised', /[਀-੿]/.test(localised), localised);
 }
 
 async function main() {

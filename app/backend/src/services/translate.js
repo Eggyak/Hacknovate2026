@@ -179,6 +179,72 @@ export async function fromEnglish(text, to) {
   }
 }
 
+/*
+ * Division names, in the citizen's language.
+ *
+ * "This looks like a matter for Cyber & Information Security" read out in
+ * Punjabi with the division name still in English leaves the single most
+ * important word in the sentence untranslated - the one the citizen has to
+ * agree with. 
+ *
+ * All fifteen names for a language are fetched in ONE request the first time
+ * that language is needed, then cached for the life of the process. Fifteen
+ * short strings per language, once, is nothing; a call per turn would be
+ * absurd. Lookup stays synchronous so the interview's prompt builder does not
+ * have to become async, and an unwarmed cache simply yields English.
+ */
+const divisionNameCache = new Map(); // langCode -> { divisionId: name }
+const warming = new Map();           // langCode -> in-flight promise
+
+export function divisionNameIn(divisionId, langCode, fallback) {
+  if (!langCode || langCode === 'en') return fallback;
+  return divisionNameCache.get(langCode)?.[divisionId] || fallback;
+}
+
+export async function warmDivisionNames(langCode, divisions) {
+  if (!langCode || langCode === 'en') return;
+  if (divisionNameCache.has(langCode)) return;
+  if (!configured()) return;
+  if (warming.has(langCode)) return warming.get(langCode);
+
+  const task = (async () => {
+    const url = new URL('/translate', env.azureTranslator.endpoint);
+    url.searchParams.set('api-version', '3.0');
+    url.searchParams.set('from', 'en');
+    url.searchParams.set('to', langCode);
+
+    const headers = {
+      'Ocp-Apim-Subscription-Key': env.azureTranslator.key,
+      'Content-Type': 'application/json',
+    };
+    if (env.azureTranslator.region) headers['Ocp-Apim-Subscription-Region'] = env.azureTranslator.region;
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(divisions.map((d) => ({ Text: d.name }))),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const map = {};
+      divisions.forEach((d, i) => {
+        const t = data?.[i]?.translations?.[0]?.text;
+        if (t) map[d.id] = t;
+      });
+      if (Object.keys(map).length > 0) divisionNameCache.set(langCode, map);
+    } catch {
+      // English remains perfectly usable.
+    } finally {
+      warming.delete(langCode);
+    }
+  })();
+
+  warming.set(langCode, task);
+  return task;
+}
+
 /** Live check for /api/health. */
 export async function probe() {
   if (!configured() && !mistral.configured()) return { ok: false, reason: 'not_configured' };
