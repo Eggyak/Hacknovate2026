@@ -69,11 +69,27 @@ function noteSuccess() {
   stats.ok += 1;
 }
 
-/** True when a slot is free; records the call when it is. */
-function takeSlot() {
+/**
+ * How much of the window each kind of call may consume.
+ *
+ * First-come-first-served is the wrong policy under a tight budget: a subject
+ * line generated for one grievance should never be the reason the next one
+ * cannot be routed. Lower-value work is cut off earlier, so the last slots in
+ * a busy minute are always there for routing.
+ */
+const BUDGET = {
+  routing: MAX_PER_WINDOW,     // 8 - the decision the citizen is waiting on
+  translation: 7,              // the English rendering the schema asks for
+  extraction: 6,               // saves typing, but the citizen can still type
+  summary: 4,                  // a nicer docket heading; purely cosmetic
+};
+
+/** True when a slot is free for work of this priority; records it when so. */
+function takeSlot(kind = 'routing') {
   const now = Date.now();
   while (recent.length > 0 && now - recent[0] > WINDOW_MS) recent.shift();
-  if (recent.length >= MAX_PER_WINDOW) return false;
+  const ceiling = BUDGET[kind] ?? MAX_PER_WINDOW;
+  if (recent.length >= ceiling) return false;
   recent.push(now);
   return true;
 }
@@ -104,15 +120,15 @@ function parseJson(text) {
  * Never throws. Returns { ok, data, reason } so callers can carry on with
  * whatever they already had.
  */
-async function chatJson(messages, { maxTokens = 400, temperature = 0 } = {}) {
+async function chatJson(messages, { maxTokens = 400, temperature = 0, kind = 'routing' } = {}) {
   if (!configured()) return { ok: false, reason: 'mistral_not_configured' };
   if (breakerOpen()) {
     stats.skipped += 1;
     return { ok: false, reason: 'circuit_open' };
   }
-  if (!takeSlot()) {
+  if (!takeSlot(kind)) {
     stats.skipped += 1;
-    return { ok: false, reason: 'local_rate_limit' };
+    return { ok: false, reason: `local_rate_limit (${kind} is capped at ${BUDGET[kind]} per minute)` };
   }
 
   stats.calls += 1;
@@ -200,7 +216,7 @@ export async function adjudicateDivision({ original, translated, lexicon }) {
     },
   ];
 
-  const r = await chatJson(messages, { maxTokens: 220 });
+  const r = await chatJson(messages, { maxTokens: 220, kind: 'routing' });
   if (!r.ok) return { ok: false, reason: r.reason, detail: r.detail };
 
   const id = r.data.division_id;
@@ -242,7 +258,7 @@ export async function translateToEnglish(text, fromLanguageName) {
     },
   ];
 
-  const r = await chatJson(messages, { maxTokens: 900 });
+  const r = await chatJson(messages, { maxTokens: 900, kind: 'translation' });
   if (!r.ok) return { ok: false, reason: r.reason, detail: r.detail };
 
   const english = String(r.data.english || '').trim();
@@ -298,7 +314,7 @@ export async function extractFields(division, { original, translated }) {
     },
   ];
 
-  const r = await chatJson(messages, { maxTokens: 500 });
+  const r = await chatJson(messages, { maxTokens: 500, kind: 'extraction' });
   if (!r.ok) return { ok: false, reason: r.reason, detail: r.detail };
 
   const raw = r.data.fields && typeof r.data.fields === 'object' ? r.data.fields : {};
@@ -349,7 +365,7 @@ export async function summarise(text, translated) {
     { role: 'user', content: String(translated || text || '').slice(0, 1500) },
   ];
 
-  const r = await chatJson(messages, { maxTokens: 80 });
+  const r = await chatJson(messages, { maxTokens: 80, kind: 'summary' });
   if (!r.ok) return { ok: false, reason: r.reason };
 
   const subject = String(r.data.subject || '').trim();
@@ -365,6 +381,7 @@ export function snapshot() {
     model: env.mistral.model,
     inWindow: recent.length,
     windowLimit: MAX_PER_WINDOW,
+    budget: BUDGET,
     breakerOpen: breakerOpen(),
     breakerOpensFor: breakerOpen() ? Math.ceil((breakerOpenUntil - now) / 1000) : 0,
     ...stats,

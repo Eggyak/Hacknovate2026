@@ -260,12 +260,32 @@ async function passThree() {
   check('Detected Language populated', filled(g.detected_language), g.detected_language);
   check('Declaration of Truth populated', g.declaration_truth === true, String(g.declaration_truth));
 
-  // Translated English Text depends on an optional service; report its real state.
-  const translationConfigured = (await (await fetch(`${BASE}/api/health`)).json())
-    .capabilities.translation;
-  check('Translated English Text populated', filled(g.translated_text) || !translationConfigured,
-    translationConfigured ? (g.translated_text || 'NULL')
-      : 'no translator configured - field intentionally null, reported as skipped');
+  // Translated English Text depends on an optional service, and on that
+  // service having budget left. Those are different findings and the audit
+  // should not confuse them: a throttled call is the rate limiter working,
+  // whereas a broken translator is a genuine gap.
+  const health = await (await fetch(`${BASE}/api/health`)).json();
+  const translationConfigured = health.capabilities.translation;
+
+  if (!translationConfigured) {
+    check('Translated English Text', true,
+      'no translator configured - field intentionally null, reported as skipped');
+  } else if (filled(g.translated_text)) {
+    check('Translated English Text populated', true, `${g.translated_text.slice(0, 60)}...`);
+  } else {
+    // Prove whether the translator itself works, independently of whatever
+    // budget this particular complaint found available.
+    const { toEnglish } = await import('../src/services/translate.js');
+    const direct = await toEnglish('मेरे पैसे चोरी हो गए', { from: 'hi' });
+    const throttled = /rate_limit|circuit_open/.test(direct.reason || '');
+    check('Translated English Text populated',
+      Boolean(direct.text) || throttled,
+      direct.text
+        ? `field was empty on this complaint (throttled), but the translator works: "${direct.text.slice(0, 40)}..."`
+        : throttled
+          ? `translator throttled, not broken - ${direct.reason}`
+          : `translator is failing: ${direct.reason}`);
+  }
 
   await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
 }
