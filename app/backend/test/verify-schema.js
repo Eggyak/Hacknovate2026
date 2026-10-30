@@ -211,7 +211,15 @@ async function passThree() {
   });
 
   await say('110001');
+  await say('New Delhi');
   await say('House 12, Connaught Place');
+
+  // The location pin, as the "Share my location" button supplies it.
+  await call(`/chat/${id}/draft`, {
+    method: 'PATCH',
+    body: { latitude: 28.6315, longitude: 77.2167 },
+  });
+
   await say('Test Citizen');
   await say('Male');
   await call(`/chat/${id}/declaration`, { method: 'POST', body: { accepted: true } });

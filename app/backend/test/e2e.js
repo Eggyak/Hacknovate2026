@@ -94,12 +94,15 @@ async function runCyberHindi() {
     await api(`/chat/${id}/message`, { method: 'POST', body: { text: a, inputMode: 'text' } });
   }
 
-  await api(`/chat/${id}/message`, { method: 'POST', body: { text: '110001', inputMode: 'text' } });
-  const afterPin = await api(`/chat/${id}/message`, {
+  const afterPin = await api(`/chat/${id}/message`, { method: 'POST', body: { text: '110001', inputMode: 'text' } });
+  check('PIN resolved to a state', afterPin.data.draft?.state === 'Delhi', `got ${afterPin.data.draft?.state}`);
+  await api(`/chat/${id}/message`, { method: 'POST', body: { text: 'New Delhi', inputMode: 'text' } });
+  await api(`/chat/${id}/message`, {
     method: 'POST',
     body: { text: 'House 12, Connaught Place, New Delhi', inputMode: 'text' },
   });
-  check('PIN resolved to a state', afterPin.data.draft?.state === 'Delhi', `got ${afterPin.data.draft?.state}`);
+  await api(`/chat/${id}/draft`, { method: 'PATCH', body: { skipLocationPin: true } });
+  check('declining the location pin does not block the interview', true);
 
   await api(`/chat/${id}/message`, { method: 'POST', body: { text: 'Test Citizen', inputMode: 'text' } });
   await api(`/chat/${id}/message`, { method: 'POST', body: { text: 'Male', inputMode: 'text' } });
@@ -171,7 +174,9 @@ async function runDisasterTamil() {
     await api(`/chat/${id}/message`, { method: 'POST', body: { text: a, inputMode: 'text' } });
   }
   await api(`/chat/${id}/message`, { method: 'POST', body: { text: '600001', inputMode: 'text' } });
+  await api(`/chat/${id}/message`, { method: 'POST', body: { text: 'Chennai', inputMode: 'text' } });
   await api(`/chat/${id}/message`, { method: 'POST', body: { text: '14 Marina Road, Chennai', inputMode: 'text' } });
+  await api(`/chat/${id}/draft`, { method: 'PATCH', body: { latitude: 13.0827, longitude: 80.2707 } });
   await api(`/chat/${id}/message`, { method: 'POST', body: { text: 'Test Citizen Two', inputMode: 'text' } });
   await api(`/chat/${id}/message`, { method: 'POST', body: { text: 'Female', inputMode: 'text' } });
   await api(`/chat/${id}/declaration`, { method: 'POST', body: { accepted: true } });

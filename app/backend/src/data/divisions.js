@@ -39,7 +39,7 @@ export const DIVISIONS = [
       { key: 'amount_lost', label: 'Amount Lost', type: 'currency', required: true, min: 1, help: 'Total money lost, in rupees.' },
       { key: 'fraud_at', label: 'Date and Time of Fraud', type: 'datetime', required: true },
       { key: 'platform_used', label: 'Platform Used', type: 'text', required: true, help: 'For example WhatsApp, a fake website, a phone call.' },
-      { key: 'suspect_details', label: "Suspect's Bank Account / UPI ID / Phone", type: 'textarea', required: false },
+      { key: 'suspect_details', label: 'Suspect Details', type: 'textarea', required: false, help: "The fraudster's bank account, UPI ID, or phone number, if you have it." },
     ],
     lexicon: {
       3: ['cyber', 'cybercrime', 'otp', 'upi', 'phishing', 'साइबर', 'ओटीपी', 'यूपीआई', 'সাইবার', 'சைபர்', 'సైబర్', 'ಸೈಬರ್', 'സൈബർ', 'સાયબર', 'ਸਾਈਬਰ', 'ସାଇବର', 'سائبر'],

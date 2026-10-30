@@ -27,7 +27,9 @@ export const STEPS = [
   'confirm_division',
   'details',
   'pincode',
+  'district',
   'address',
+  'location_pin',
   'name',
   'gender',
   'evidence',
@@ -50,6 +52,7 @@ function emptyDraft() {
     address: null,
     latitude: null,
     longitude: null,
+    locationPinAnswered: false,
     fullName: null,
     gender: null,
     attachments: [],
@@ -100,7 +103,11 @@ export function nextStep(draft, citizen) {
   if (missing.length > 0) return 'details';
 
   if (!draft.pincode) return 'pincode';
+  if (!draft.district) return 'district';
   if (!draft.address) return 'address';
+  // Offered once. A citizen who declines, or whose browser refuses, is not
+  // asked again - a GPS fix must never be the thing that blocks a complaint.
+  if (!draft.locationPinAnswered) return 'location_pin';
   if (!draft.fullName && !citizen?.full_name) return 'name';
   if (!draft.gender && !citizen?.gender) return 'gender';
   if (!draft.declarationTruth) return 'declaration';
@@ -164,12 +171,18 @@ export function prompt(conversation, citizen) {
     case 'pincode':
       return { step, text: t('ask_location', language), input: { kind: 'pincode' } };
 
+    case 'district':
+      return { step, text: t('ask_district', language), input: { kind: 'district' } };
+
     case 'address':
       return {
         step,
         text: t('ask_field', language, { label: 'Complete address' }),
         input: { kind: 'address' },
       };
+
+    case 'location_pin':
+      return { step, text: t('ask_location_pin', language), input: { kind: 'location_pin' } };
 
     case 'name':
       return { step, text: t('ask_field', language, { label: 'Your full name' }), input: { kind: 'name' } };
@@ -294,6 +307,10 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
       break;
     }
 
+    case 'district':
+      draft.district = value;
+      break;
+
     case 'address':
       draft.address = value;
       break;
@@ -405,7 +422,9 @@ export async function patchDraft(conversation, citizen, patch = {}) {
   if (Number.isFinite(Number(patch.latitude)) && Number.isFinite(Number(patch.longitude))) {
     draft.latitude = Number(patch.latitude);
     draft.longitude = Number(patch.longitude);
+    draft.locationPinAnswered = true;
   }
+  if (patch.skipLocationPin === true) draft.locationPinAnswered = true;
 
   const updated = { ...conversation, draft, step: nextStep(draft, citizen) };
   await save(updated);

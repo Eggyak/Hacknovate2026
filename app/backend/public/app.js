@@ -952,9 +952,12 @@ function renderAffordance(r) {
     return;
   }
 
-  if (kind === 'pincode') {
-    chips.innerHTML = '<button class="chip" id="useGps">Use my location</button>';
+  if (kind === 'location_pin') {
+    chips.innerHTML = `
+      <button class="chip on" id="useGps">Share my location</button>
+      <button class="chip" id="skipGps">Skip</button>`;
     $('#useGps').onclick = useGps;
+    $('#skipGps').onclick = () => patchAndAdvance({ skipLocationPin: true });
     return;
   }
 
@@ -997,19 +1000,43 @@ async function chooseDivision(divisionId) {
   if (r.step === 'done') await finishUp();
 }
 
+/** Apply a change to the draft and render whatever the bot asks next. */
+async function patchAndAdvance(patch) {
+  const r = await api.patch(`/chat/${state.conversation.conversationId}/draft`, patch);
+  state.conversation = r;
+  pushBot(r.bot.text, r.language);
+  renderAffordance(r);
+  renderProgress(r);
+  if (r.step === 'done') await finishUp();
+}
+
+/**
+ * Pin the citizen's coordinates, if they agree and the browser can.
+ *
+ * Declining is a first-class answer: the interview records that the question
+ * was asked and moves on. A refused or unavailable GPS fix must never be the
+ * thing that stops someone filing a grievance.
+ */
 function useGps() {
-  if (!navigator.geolocation) return toast('This browser cannot share a location.', 'warn');
+  if (!navigator.geolocation) {
+    toast('This browser cannot share a location.', 'warn');
+    return patchAndAdvance({ skipLocationPin: true });
+  }
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
-      await api.patch(`/chat/${state.conversation.conversationId}/draft`, {
+      await patchAndAdvance({
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,
       });
-      toast('Location pinned. Please still type your PIN code.');
+      toast('Location pinned.', 'good');
     },
-    () => toast('Location was not shared.', 'warn'),
+    async () => {
+      toast('Location was not shared.', 'warn');
+      await patchAndAdvance({ skipLocationPin: true });
+    },
     { enableHighAccuracy: true, timeout: 8000 },
   );
+  return undefined;
 }
 
 /** Progress through the required fields, derived from the live draft. */
@@ -1024,7 +1051,7 @@ function renderProgress(r) {
     ['Department', Boolean(d.divisionId && d.confirmedDivision)],
     ['Required details', Boolean(division) && (division.fields || [])
       .filter((f) => f.required).every((f) => String(d.details?.[f.key] ?? '').trim())],
-    ['Location', Boolean(d.pincode && d.address)],
+    ['Location', Boolean(d.pincode && d.district && d.address)],
     ['Declaration', d.declarationTruth === true],
   ];
 
