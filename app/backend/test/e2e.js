@@ -358,6 +358,104 @@ async function runAuthFlow() {
   await query('DELETE FROM otp_codes WHERE mobile = $1', [mobile]);
 }
 
+/**
+ * The conversation follows the citizen's voice, not the portal's chrome.
+ *
+ * The case that matters: someone reading the site in Hindi who speaks to the
+ * bot in Punjabi must be answered in Punjabi. And the case that would ruin
+ * it: a short, language-neutral answer like "50000" must not be read as a
+ * switch back to English.
+ */
+async function runLanguageFollowing() {
+  console.log('\n--- the bot follows the spoken language ---');
+  const { citizen, token } = await makeCitizen('9000000031');
+  await query("UPDATE citizens SET preferred_language = 'hi' WHERE id = $1", [citizen.id]);
+  const api = client(token);
+
+  // Portal language is Hindi - that is the chrome, not the conversation.
+  const start = await api('/chat/start', { method: 'POST', body: { language: 'hi' } });
+  const id = start.data.conversationId;
+  check('interview opens in the portal language', start.data.language === 'hi', start.data.language);
+
+  // ...but the citizen speaks Punjabi.
+  const punjabi = await api(`/chat/${id}/message`, {
+    method: 'POST',
+    body: { text: 'ਮੇਰੇ ਬੈਂਕ ਖਾਤੇ ਵਿੱਚੋਂ ਧੋਖੇ ਨਾਲ ਪੈਸੇ ਕੱਢ ਲਏ ਗਏ ਹਨ, ਕਿਰਪਾ ਕਰਕੇ ਮੇਰੀ ਸ਼ਿਕਾਇਤ ਦਰਜ ਕਰੋ', inputMode: 'text' },
+  });
+  check('conversation switches to the spoken language', punjabi.data.language === 'pa',
+    `got ${punjabi.data.language}`);
+  check('the switch is reported', punjabi.data.detected?.code === 'pa',
+    JSON.stringify(punjabi.data.detected?.method));
+  check('the bot now replies in Punjabi', /[਀-੿]/.test(punjabi.data.bot?.text || ''),
+    (punjabi.data.bot?.text || '').slice(0, 40));
+
+  await api(`/chat/${id}/division`, { method: 'POST', body: { divisionId: 'cyber' } });
+
+  // A language-neutral answer must not drag the conversation elsewhere.
+  const neutral = await api(`/chat/${id}/message`, {
+    method: 'POST', body: { text: 'UTR123456789012', inputMode: 'text' },
+  });
+  check('a language-neutral answer does not switch the language',
+    neutral.data.language === 'pa', `got ${neutral.data.language}`);
+
+  const digits = await api(`/chat/${id}/message`, {
+    method: 'POST', body: { text: '50000', inputMode: 'text' },
+  });
+  check('a bare number does not switch the language',
+    digits.data.language === 'pa', `got ${digits.data.language}`);
+
+  // Spoken input: Azure's own identification of the audio wins outright.
+  const spoken = await api(`/chat/${id}/message`, {
+    method: 'POST',
+    body: {
+      text: 'October 28 at 2 PM',
+      inputMode: 'voice',
+      spoken: { locale: 'ta-IN', confidence: 0.93, candidates: ['pa-IN', 'ta-IN'] },
+    },
+  });
+  check("Azure's audio identification is authoritative", spoken.data.language === 'ta',
+    `got ${spoken.data.language}`);
+  check('it is attributed to Azure, not the local detector',
+    (spoken.data.detected?.method || '').startsWith('azure'), spoken.data.detected?.method);
+
+  await query('DELETE FROM citizens WHERE id = $1', [citizen.id]);
+}
+
+/** Azure Translator, once configured, must carry all fourteen. */
+async function runTranslation() {
+  console.log('\n--- translation ---');
+  const { toEnglish, configured } = await import('../src/services/translate.js');
+
+  if (!configured()) {
+    check('Azure Translator configured', false, 'no key set - falling back to the LLM');
+    return;
+  }
+
+  const samples = [
+    ['hi', 'मेरे बैंक खाते से पैसे चोरी हो गए'],
+    ['pa', 'ਮੇਰੇ ਬੈਂਕ ਖਾਤੇ ਵਿੱਚੋਂ ਪੈਸੇ ਚੋਰੀ ਹੋ ਗਏ'],
+    ['ta', 'எனது வங்கிக் கணக்கிலிருந்து பணம் திருடப்பட்டது'],
+    ['or', 'ମୋର ବ୍ୟାଙ୍କ ଖାତାରୁ ଟଙ୍କା ଚୋରି ହୋଇଛି'],
+    ['as', 'মোৰ বেংক একাউণ্টৰ পৰা টকা চুৰি হৈছে'],
+    ['ur', 'میرے بینک اکاؤنٹ سے پیسے چوری ہو گئے'],
+    ['ne', 'मेरो बैंक खाताबाट पैसा चोरी भयो'],
+    ['ml', 'എന്റെ ബാങ്ക് അക്കൗണ്ടിൽ നിന്ന് പണം മോഷ്ടിക്കപ്പെട്ടു'],
+  ];
+
+  const failures = [];
+  for (const [code, text] of samples) {
+    const r = await toEnglish(text, { from: code });
+    if (!r.text || !/bank|money|stolen|account|theft/i.test(r.text)) {
+      failures.push(`${code}: ${r.text || r.reason}`);
+    }
+  }
+  check(`Azure Translator handles ${samples.length} scripts`, failures.length === 0,
+    failures.length ? failures.join(' | ') : 'all produced sensible English');
+
+  const one = await toEnglish('ਮੇਰੀ ਸ਼ਿਕਾਇਤ ਦਰਜ ਕਰੋ', { from: 'pa' });
+  check('it reports itself as the provider', (one.provider || '').includes('azure'), one.provider);
+}
+
 async function main() {
   console.log(`Testing ${BASE}`);
   try {
@@ -367,6 +465,8 @@ async function main() {
     await runSpeech();
     await runAudioCapture();
     await runAuthFlow();
+    await runLanguageFollowing();
+    await runTranslation();
   } catch (err) {
     console.error('\nUNCAUGHT', err);
     failed += 1;

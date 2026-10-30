@@ -107,6 +107,23 @@ function toast(message, kind = 'info') {
 
 /* ---------- speech ---------- */
 
+/**
+ * Whether the bot reads its replies aloud.
+ *
+ * Off by default and remembered. Audio that starts on its own is hostile in
+ * the places this portal will actually be used - a shared room, an office, a
+ * queue - so speaking is opt-in, and every reply keeps its own Listen button
+ * for one-off use.
+ */
+const speakPref = {
+  get() {
+    try { return localStorage.getItem('mha_speak') === 'on'; } catch { return false; }
+  },
+  set(on) {
+    try { localStorage.setItem('mha_speak', on ? 'on' : 'off'); } catch { /* private window */ }
+  },
+};
+
 const speech = {
   recognizer: null,
   recording: false,
@@ -914,9 +931,15 @@ async function viewChat() {
     <div class="row between wrap mb-4">
       <div>
         <h1>Register a grievance</h1>
-        <p class="muted small" style="margin:0">Describe what happened in your own words.</p>
+        <p class="muted small" style="margin:0">Describe what happened in your own words, in any language.</p>
       </div>
-      <div id="langPick"></div>
+      <div class="row wrap" style="gap:10px">
+        <div id="detectedBadge"></div>
+        <label class="speaktoggle" title="Read the bot's replies aloud">
+          <input type="checkbox" id="speakToggle">
+          <span>&#128266; Speak replies</span>
+        </label>
+      </div>
     </div>
 
     <div class="grid" style="grid-template-columns:minmax(0,1.65fr) minmax(0,1fr)">
@@ -942,13 +965,15 @@ async function viewChat() {
       </div>
     </div>`);
 
-  renderLanguagePicker();
+  wireSpeakToggle();
+  renderDetected(null);
 
   const start = await api.post('/chat/start', { language: state.citizen.preferred_language || 'en' });
   state.conversation = start;
   pushBot(start.bot.text, start.language);
   renderAffordance(start);
   renderProgress(start);
+  renderDetected(start);
 
   $('#composer').onsubmit = (e) => {
     e.preventDefault();
@@ -971,24 +996,47 @@ async function viewChat() {
   wireMic();
 }
 
-function renderLanguagePicker() {
-  const host = $('#langPick');
+/**
+ * What language the bot is currently being spoken to in, and how it knows.
+ *
+ * Deliberately separate from the portal language in the masthead. A citizen
+ * may read the site in Hindi and speak to the bot in Punjabi; the bot follows
+ * the voice, and this badge is where that becomes visible rather than
+ * something the citizen has to infer from the replies.
+ */
+function renderDetected(r) {
+  const host = $('#detectedBadge');
   if (!host) return;
-  const current = state.conversation?.language || state.citizen?.preferred_language || 'en';
-  host.innerHTML = `
-    <label class="sr" for="langSel">Language</label>
-    <select id="langSel" style="min-width:160px">
-      ${state.languages.map((l) =>
-        `<option value="${l.code}" ${l.code === current ? 'selected' : ''}>${esc(l.native)} · ${esc(l.name)}</option>`).join('')}
-    </select>`;
 
-  $('#langSel').onchange = async (e) => {
-    const code = e.target.value;
-    await api.patch('/auth/profile', { preferredLanguage: code });
-    state.citizen.preferred_language = code;
-    const lang = langOf(code);
-    $('#stream').setAttribute('dir', lang?.dir || 'ltr');
-    toast(`Switched to ${lang?.name}. The bot will reply in this language.`);
+  const d = r?.detected;
+  if (!d || !d.code) {
+    host.innerHTML = '<span class="detbadge waiting">Listening for your language</span>';
+    return;
+  }
+
+  const lang = langOf(d.code);
+  const pct = Math.round((d.confidence || 0) * 100);
+  const viaAzure = (d.method || '').startsWith('azure');
+
+  host.innerHTML = `
+    <span class="detbadge ${d.switched ? 'switched' : ''}" title="${esc(d.method || '')}">
+      <b>${esc(lang?.native || d.code)}</b>
+      <span class="n">${esc(lang?.name || '')}</span>
+      ${pct ? `<span class="pct">${pct}%</span>` : ''}
+      <span class="src">${viaAzure ? 'Azure LID' : 'script'}</span>
+    </span>
+    ${d.switched && d.previous
+      ? `<span class="small muted" style="margin-inline-start:6px">switched from ${esc(langOf(d.previous)?.name || d.previous)}</span>`
+      : ''}`;
+}
+
+function wireSpeakToggle() {
+  const box = $('#speakToggle');
+  if (!box) return;
+  box.checked = speakPref.get();
+  box.onchange = () => {
+    speakPref.set(box.checked);
+    toast(box.checked ? 'The bot will read its replies aloud.' : 'The bot will stay quiet.');
   };
 }
 
@@ -1029,9 +1077,10 @@ async function sendMessage(text, inputMode, spoken) {
     state.lastPipeline = r.pipeline;
 
     pushBot(r.bot.text, r.language);
-    if (inputMode === 'voice') speech.say(r.bot.text, r.language);
+    if (speakPref.get()) speech.say(r.bot.text, r.language);
 
     renderAffordance(r);
+    renderDetected(r);
     renderProgress(r);
     renderTrace(r.pipeline);
 

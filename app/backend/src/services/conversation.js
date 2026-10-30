@@ -24,6 +24,12 @@ import { byCode, buildLidCandidates } from '../data/languages.js';
 import { languagesForPincode, stateForPincode, isValidPincode } from '../data/states.js';
 import { t } from '../data/phrases.js';
 
+/**
+ * How sure the local detector must be before it moves the conversation to a
+ * different language. Short, language-neutral answers score far below this.
+ */
+const LANGUAGE_SWITCH_CONFIDENCE = 0.5;
+
 export const STEPS = [
   'narrative',
   'confirm_division',
@@ -232,32 +238,60 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
 
   const step = nextStep(draft, citizen);
 
-  // ---- Language identification -------------------------------------------
-  let language = conversation.language;
+  // ---- Language identification, on every turn ----------------------------
+  //
+  // Not just the opening narrative. A citizen may describe the incident in
+  // Punjabi and then answer a follow-up in English, or switch mid-interview
+  // because a word comes more easily in another language, and the bot should
+  // follow them rather than hold them to whatever they opened with.
+  //
+  // Two sources, in order of authority:
+  //   spoken.locale  Azure's own identification of the AUDIO. It heard the
+  //                  speech; we only ever see a transcript. It wins.
+  //   local detector Unicode script plus marker lexicons, for typed text.
+  //
+  // Short answers are the trap. "50000", "Male" and "110001" carry no
+  // language signal at all, and switching the conversation on the strength of
+  // them would throw a citizen into a language they never chose. The local
+  // detector reports confidence 0 for those, and the threshold below means
+  // they are ignored.
+  const previousLanguage = conversation.language;
+  let language = previousLanguage;
+  let identification = null;
 
-  if (step === 'narrative') {
-    if (spoken?.locale) {
-      const lang = byCode(String(spoken.locale).split('-')[0]);
-      language = lang ? lang.code : language;
-      draft.language = {
-        code: language,
+  if (spoken?.locale) {
+    const lang = byCode(String(spoken.locale).split('-')[0]);
+    if (lang) {
+      language = lang.code;
+      identification = {
+        code: lang.code,
         locale: spoken.locale,
         confidence: Number(spoken.confidence || 0),
         method: 'azure-speech-continuous-lid',
-        evidence: [`Azure identified ${spoken.locale} from the audio`],
+        evidence: [`Azure identified ${spoken.locale} from the audio itself`],
         candidatesEvaluated: spoken.candidates || [],
       };
-      pipeline.steps.push({
-        stage: 'language-identification',
-        provider: 'azure-speech',
-        detail: draft.language,
-      });
-    } else {
-      const detected = detectLanguage(value, { hint: conversation.language });
-      language = detected.code;
-      draft.language = detected;
-      pipeline.steps.push({ stage: 'language-identification', provider: 'local-script-analysis', detail: detected });
     }
+  } else {
+    const detected = detectLanguage(value, { hint: previousLanguage });
+    identification = detected;
+    // Only a confident reading may move the conversation.
+    if (detected.confidence >= LANGUAGE_SWITCH_CONFIDENCE) language = detected.code;
+  }
+
+  if (identification) {
+    const switched = language !== previousLanguage;
+    pipeline.steps.push({
+      stage: 'language-identification',
+      provider: spoken?.locale ? 'azure-speech' : 'local-script-analysis',
+      detail: { ...identification, switched, previous: switched ? previousLanguage : null },
+    });
+    // The narrative's language is the one recorded on the grievance; later
+    // turns may differ without rewriting what the complaint was filed in.
+    if (step === 'narrative' || !draft.language) draft.language = identification;
+    // The most recent reading, kept so a resumed conversation can still show
+    // what language it is currently being held in.
+    draft.lastLanguage = { ...identification, switched, previous: switched ? previousLanguage : null };
   }
 
   // ---- Apply the utterance to the current step ----------------------------

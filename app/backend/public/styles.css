@@ -613,6 +613,44 @@ input[aria-invalid='true'] { border-color: var(--danger); }
 .chip:hover { background: var(--surface-2); border-color: var(--secondary); }
 .chip.on { background: var(--primary); color: #fff; border-color: var(--primary); }
 
+/* ---------- Live language detection ---------- */
+
+/*
+ * What the bot currently hears. Shown next to the conversation rather than
+ * buried in the trace, because the citizen needs to know the machine
+ * understood which language they are speaking BEFORE they describe a crime
+ * in it.
+ */
+.detbadge {
+  display: inline-flex; align-items: baseline; gap: 7px;
+  background: var(--surface-2); border: 1px solid var(--line-2);
+  border-radius: var(--r-full); padding: 6px 13px;
+  font-size: 13px; white-space: nowrap;
+}
+.detbadge b { font-size: 14px; font-weight: 700; }
+.detbadge .n { color: var(--ink-3); font-size: 12px; }
+.detbadge .pct {
+  font-size: 11px; font-weight: 700; color: var(--success);
+  font-variant-numeric: tabular-nums;
+}
+.detbadge .src {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--secondary); background: #fff;
+  border: 1px solid var(--line); border-radius: var(--r-sm); padding: 1px 5px;
+}
+.detbadge.waiting { color: var(--ink-3); font-style: italic; }
+.detbadge.switched { border-color: var(--accent); background: var(--warn-soft); }
+
+.speaktoggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line-2); border-radius: var(--r-full);
+  padding: 6px 13px; cursor: pointer; font-size: 13px; font-weight: 600;
+  background: #fff; user-select: none; white-space: nowrap;
+}
+.speaktoggle:hover { background: var(--surface-2); }
+.speaktoggle input { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
+.speaktoggle:has(input:checked) { border-color: var(--success); background: var(--success-soft); color: #166534; }
+
 /* ---------- Pipeline trace ---------- */
 
 /*

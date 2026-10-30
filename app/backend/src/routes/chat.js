@@ -42,11 +42,22 @@ function view(conversation, citizen, reply, pipeline) {
     draft: conversation.draft,
     division: conversation.draft.divisionId ? divisionById(conversation.draft.divisionId) : null,
     lidCandidates: lidCandidatesFor(conversation, citizen),
+    // What language the bot is currently speaking, and how it knows. The
+    // portal's own UI language is deliberately NOT this: a citizen reading
+    // the site in Hindi may well speak to the bot in Punjabi, and the bot
+    // follows the voice, not the chrome.
+    detected: conversation.draft?.lastLanguage || conversation.draft?.language || null,
     pipeline: pipeline || null,
   };
 }
 
-/** Open a new interview. */
+/**
+ * Open a new interview.
+ *
+ * The portal language is only a starting guess for the very first prompt,
+ * before the citizen has said anything we could identify. From their first
+ * utterance onward the conversation follows what they actually speak.
+ */
 chatRouter.post('/start', async (req, res, next) => {
   try {
     const language = req.body?.language || req.citizen.preferred_language || 'en';
