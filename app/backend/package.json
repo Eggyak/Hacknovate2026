@@ -1,0 +1,24 @@
+{
+  "name": "mha-samadhan-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MHA Samadhan - multilingual voice-first grievance intake and routing",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node src/lib/migrate.js",
+    "test": "node --test test/"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "cookie-parser": "^1.4.7",
+    "helmet": "^8.0.0",
+    "express-rate-limit": "^7.5.0"
+  }
+}

@@ -1,0 +1,71 @@
+# MHA Samadhan - its own isolated stack.
+#
+# Nothing here is shared with the other stacks on this host: its own database
+# container, its own network, its own volume. The only shared surface is the
+# `edge` network, which exists solely so Traefik can reach the API.
+#
+# Deployed to /opt/stacks/mha-samadhan on the VPS.
+
+services:
+  mha-db:
+    image: postgres:16-alpine
+    container_name: mha-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Deterministic collation, so ORDER BY does not depend on the host locale.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    volumes:
+      - mha-pgdata:/var/lib/postgresql/data
+    networks:
+      - mha-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mha-api:
+    build: ./app/backend
+    image: mha-samadhan-api:latest
+    container_name: mha-api
+    restart: unless-stopped
+    depends_on:
+      mha-db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 8120
+      PUBLIC_URL: ${PUBLIC_URL}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@mha-db:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      AZURE_SPEECH_KEY: ${AZURE_SPEECH_KEY}
+      AZURE_SPEECH_REGION: ${AZURE_SPEECH_REGION}
+      AZURE_SPEECH_ENDPOINT: ${AZURE_SPEECH_ENDPOINT}
+      AZURE_TRANSLATOR_KEY: ${AZURE_TRANSLATOR_KEY:-}
+      AZURE_TRANSLATOR_REGION: ${AZURE_TRANSLATOR_REGION:-}
+      N8N_OTP_WEBHOOK_URL: ${N8N_OTP_WEBHOOK_URL:-}
+      N8N_OTP_API_KEY: ${N8N_OTP_API_KEY:-}
+      OTP_ECHO_FOR_DEV: ${OTP_ECHO_FOR_DEV:-false}
+      UPLOAD_DIR: /data/uploads
+      SLA_DAYS: ${SLA_DAYS:-21}
+    volumes:
+      - mha-uploads:/data/uploads
+    # Bound to loopback only; Traefik reaches it from the host side.
+    ports:
+      - "127.0.0.1:8120:8120"
+    networks:
+      - mha-internal
+      - edge
+
+volumes:
+  mha-pgdata:
+  mha-uploads:
+
+networks:
+  mha-internal:
+    driver: bridge
+  edge:
+    external: true

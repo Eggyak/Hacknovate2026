@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MHA Samadhan</title>
+<meta name="description" content="Register a grievance with the Ministry of Home Affairs by voice or text, in fourteen Indian languages.">
+<meta name="theme-color" content="#0b2545">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@500;600&family=Noto+Sans+Devanagari:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;600;700&family=Noto+Sans+Tamil:wght@400;600;700&family=Noto+Sans+Telugu:wght@400;600;700&family=Noto+Sans+Kannada:wght@400;600;700&family=Noto+Sans+Malayalam:wght@400;600;700&family=Noto+Sans+Gujarati:wght@400;600;700&family=Noto+Sans+Gurmukhi:wght@400;600;700&family=Noto+Sans+Oriya:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230b2545'/><text x='16' y='22' font-family='system-ui' font-size='15' font-weight='800' fill='white' text-anchor='middle'>MS</text></svg>">
+</head>
+<body>
+
+<div class="tricolour"></div>
+
+<header class="app">
+  <div class="wrap">
+    <div class="bar">
+      <a class="brand" href="#/" aria-label="MHA Samadhan home">
+        <span class="seal" aria-hidden="true">MS</span>
+        <span>
+          <b>MHA Samadhan</b>
+          <span>Ministry of Home Affairs</span>
+        </span>
+      </a>
+
+      <nav class="main" id="nav" hidden></nav>
+
+      <div class="row" style="gap:8px;margin-inline-start:auto" id="headerRight"></div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="wrap" id="view" role="main" aria-live="polite">
+    <div class="center" style="padding:80px 0">
+      <span class="spin dark" aria-hidden="true"></span>
+      <p class="muted mt-3">Loading</p>
+    </div>
+  </div>
+</main>
+
+<footer style="border-top:1px solid var(--line);padding:20px 0;margin-top:40px">
+  <div class="wrap row between wrap small muted">
+    <span>Grievances are answered within <b id="slaDays">21</b> days.</span>
+    <span id="capBar"></span>
+  </div>
+</footer>
+
+<!--
+  The Azure Speech browser SDK. Recognition runs here, against a short-lived
+  token minted by /api/speech/token, so the subscription key never reaches the
+  browser and live partial transcripts are possible while the citizen speaks.
+-->
+<script src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk@1.42.0/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle-min.js" defer></script>
+<script src="/app.js" type="module"></script>
+
+</body>
+</html>
