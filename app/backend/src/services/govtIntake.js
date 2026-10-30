@@ -512,8 +512,10 @@ export async function refreshStatuses(limit = 25) {
       );
 
       await query(
+        // Cast explicitly: in a SELECT list Postgres has nothing to infer a
+        // bare parameter's type from, and deduces "inconsistent types".
         `INSERT INTO notifications (citizen_id, grievance_id, title, body)
-         SELECT citizen_id, id, $2, $3 FROM grievances WHERE id = $1`,
+         SELECT citizen_id, id, $2::text, $3::text FROM grievances WHERE id = $1`,
         [
           row.id,
           `${row.reference_id} is now ${mapped.replace(/_/g, ' ')}`,
