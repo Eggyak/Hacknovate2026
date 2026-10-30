@@ -26,7 +26,17 @@ const port=Number(process.env.API_PORT??3001);
 const host=process.env.API_HOST??'127.0.0.1';
 // Declared here, not beside the intake limiters: `const` is not hoisted and
 // the sign-in routes above those would hit the temporal dead zone.
-const loginLimiter=rateLimit({windowMs:15*60*1000,limit:30,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many sign-in attempts. Try again shortly.'}});
+/*
+ * A ceiling on sign-in attempts per IP, not a throttle on staff.
+ *
+ * Thirty in fifteen minutes was far too tight: a department office behind one
+ * NAT would trip it at nine in the morning, and the RBAC suite - which signs
+ * in as every role in turn - tripped it immediately. The real defence against
+ * guessing is elsewhere and stronger: bcrypt makes each attempt expensive,
+ * the access key is checked before the password, and the one-time code has
+ * its own per-challenge attempt ceiling. This is only here to stop a flood.
+ */
+const loginLimiter=rateLimit({windowMs:15*60*1000,limit:Number(process.env.LOGIN_RATE_LIMIT??300),standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many sign-in attempts. Try again shortly.'}});
 
 const cookieName='mha_session';
 const sessionLifetime=8*60*60*1000;
