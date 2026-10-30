@@ -23,6 +23,73 @@ import { divisionById } from '../data/divisions.js';
 export { PRIORITY, PRIORITY_LABEL, scorePriority, clusterSignature };
 
 /* ------------------------------------------------------------------ *
+ * Duplicate detection (the parts that touch the database)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Attach a grievance to the cluster for its problem, creating one if needed.
+ *
+ * Returns { clusterId, memberCount, isNew } or null when the complaint is
+ * not groupable. Runs inside the caller's transaction where there is one, so
+ * two simultaneous reports of the same thing cannot create two clusters.
+ */
+export async function assignCluster(client, grievance, classification) {
+  const signature = clusterSignature({
+    divisionId: grievance.division_id,
+    pincode: grievance.pincode,
+    classification,
+  });
+  if (!signature || !grievance.pincode) return null;
+
+  const division = divisionById(grievance.division_id);
+  const title = `${division ? division.name : grievance.division_id} near ${grievance.pincode}`;
+
+  const upserted = await client.query(
+    `INSERT INTO grievance_clusters (division_id, pincode, signature, title, member_count)
+     VALUES ($1, $2, $3, $4, 1)
+     ON CONFLICT (division_id, pincode, signature) DO UPDATE
+       SET member_count = grievance_clusters.member_count + 1,
+           last_seen = NOW()
+     RETURNING id, member_count, (xmax = 0) AS inserted`,
+    [grievance.division_id, grievance.pincode, signature, title],
+  );
+
+  const row = upserted.rows[0];
+  await client.query('UPDATE grievances SET cluster_id = $2 WHERE id = $1', [grievance.id, row.id]);
+
+  return { clusterId: row.id, memberCount: row.member_count, isNew: row.inserted };
+}
+
+/**
+ * Complaints that look like the one being written, before it is filed.
+ *
+ * Offered so a citizen can add their weight to an existing report instead of
+ * creating the forty-first copy of it. Only ever a suggestion: the citizen
+ * may know something the other reports do not, and must always be able to
+ * file their own.
+ */
+export async function findSimilar({ divisionId, pincode, classification, excludeCitizenId }) {
+  const signature = clusterSignature({ divisionId, pincode, classification });
+  if (!signature || !pincode) return [];
+
+  const r = await query(
+    `SELECT g.reference_id, g.subject, g.status, g.submitted_at, g.priority_score,
+            c.member_count,
+            (SELECT COUNT(*)::int FROM grievance_supports s WHERE s.grievance_id = g.id) AS supporters
+       FROM grievances g
+       JOIN grievance_clusters c ON c.id = g.cluster_id
+      WHERE c.division_id = $1 AND c.pincode = $2 AND c.signature = $3
+        AND g.citizen_id <> $4
+        AND g.status NOT IN ('closed','rejected')
+      ORDER BY g.submitted_at DESC
+      LIMIT 5`,
+    [divisionId, pincode, signature, excludeCitizenId || 0],
+  );
+  return r.rows;
+}
+
+
+/* ------------------------------------------------------------------ *
  * Support
  * ------------------------------------------------------------------ */
 
