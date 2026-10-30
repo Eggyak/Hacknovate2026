@@ -140,6 +140,25 @@ test('clearing recent chats does not delete them', () => {
   assert.ok(!/DELETE|api\.call|method: 'DELETE'/.test(block), 'hiding a chat reaches the server');
 });
 
+test('recent chats is a page, not a panel over the conversation', () => {
+  /*
+   * As a panel it left the citizen reading a list of past complaints stacked
+   * on top of the one they were in the middle of writing. Looking for an
+   * earlier chat is its own task and gets its own screen.
+   */
+  assert.ok(!/historyPanel/.test(app), 'the inline panel is back');
+  assert.ok(/async function viewHistory\(\)/.test(app), 'the history page is gone');
+  assert.ok(/hash === '#\/chats'/.test(app), 'the history page is not routed');
+  assert.ok(/href="#\/chats"/.test(app), 'nothing links to it');
+});
+
+test('toggling spoken replies does not raise a toast', () => {
+  // The checkbox shows its own state; a confirmation for every flip stacked
+  // over the composer the citizen was trying to use.
+  const block = app.slice(app.indexOf('function wireSpeakToggle'), app.indexOf('function wireSpeakToggle') + 600);
+  assert.ok(!/toast\(/.test(block), 'the speak toggle raises a toast again');
+});
+
 test('an unlisted complaint still has somewhere to go', () => {
   assert.ok(/data-d="other"/.test(app), 'the catch-all is no longer offered');
   assert.ok(/chip-other/.test(app), 'it is not distinguished from a real department');

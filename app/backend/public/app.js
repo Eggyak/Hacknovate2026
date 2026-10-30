@@ -1240,11 +1240,9 @@ async function viewChat() {
           <span>&#128266; Speak replies</span>
         </label>
         <button class="btn ghost" id="newChat" style="min-height:38px">+ New chat</button>
-        <button class="btn ghost" id="toggleHistory" style="min-height:38px">Recent chats</button>
+        <a class="btn ghost" href="#/chats" style="min-height:38px">Recent chats</a>
       </div>
     </div>
-
-    <div id="historyPanel" class="card mb-4 hidden"></div>
 
     <div class="grid" style="grid-template-columns:minmax(0,1.65fr) minmax(0,1fr)">
       <div class="card" style="padding:0;overflow:hidden">
@@ -1273,7 +1271,6 @@ async function viewChat() {
   renderDetected(null);
 
   $('#newChat').onclick = () => startFreshChat();
-  $('#toggleHistory').onclick = () => toggleHistory();
 
   let current = null;
 
@@ -1374,32 +1371,74 @@ const hiddenChats = {
   },
 };
 
-async function showHistory() {
-  const panel = $('#historyPanel');
-  if (!panel) return;
+/**
+ * Recent chats, as a page of its own.
+ *
+ * It began as a panel above the conversation, which meant asking for the list
+ * left the citizen reading both at once - a list of past complaints stacked
+ * on top of the one they were in the middle of writing. Looking for an
+ * earlier chat is its own task, so it gets its own screen and a way back.
+ */
+async function viewHistory() {
+  setView(`
+    <div class="row between wrap mb-4">
+      <div>
+        <h1>Recent chats</h1>
+        <p class="muted small" style="margin:0">Open an earlier complaint to carry on where you left it.</p>
+      </div>
+      <div class="row wrap" style="gap:10px">
+        <a class="btn ghost" href="#/new">&larr; Back to the bot</a>
+        <button class="btn primary" id="newFromHistory">+ New chat</button>
+      </div>
+    </div>
+    <div id="historyBody" class="measure"></div>`);
 
-  panel.classList.remove('hidden');
-  panel.innerHTML = '<div class="center" style="padding:20px"><span class="spin dark"></span></div>';
+  $('#newFromHistory').onclick = async () => {
+    state.activeConversationId = null;
+    state.conversation = null;
+    state.lastPipeline = null;
+    location.hash = '#/new';
+  };
 
+  await renderHistoryBody();
+}
+
+async function renderHistoryBody() {
+  const body = $('#historyBody');
+  if (!body) return;
+
+  body.innerHTML = '<div class="card center" style="padding:40px"><span class="spin dark"></span></div>';
+
+  let conversations;
   try {
-    const { conversations } = await api.get('/chat/history');
-    const hidden = hiddenChats.read();
-    const visible = conversations.filter((c) => !hidden.has(String(c.id)));
+    ({ conversations } = await api.get('/chat/history'));
+  } catch (ex) {
+    body.innerHTML = `<div class="notice bad">${esc(ex.message)}</div>`;
+    return;
+  }
 
-    panel.innerHTML = `
+  const hidden = hiddenChats.read();
+  const visible = conversations.filter((c) => !hidden.has(String(c.id)));
+
+  body.innerHTML = `
+    <div class="card">
       <div class="row between wrap mb-3">
-        <h3 style="margin:0">Recent chats</h3>
+        <h3 style="margin:0">${visible.length} chat${visible.length === 1 ? '' : 's'}</h3>
         <div class="row" style="gap:8px">
-          ${hidden.size ? '<button class="btn quiet" id="restoreChats">Show hidden</button>' : ''}
+          ${hidden.size ? `<button class="btn quiet" id="restoreChats">Show hidden (${hidden.size})</button>` : ''}
           ${visible.length ? '<button class="btn quiet" id="clearChats">Clear list</button>' : ''}
         </div>
       </div>
+
       ${visible.length === 0 ? `
-        <p class="muted small" style="margin:0">
-          ${hidden.size
-            ? 'Your list is cleared on this device. Nothing has been deleted.'
-            : 'No earlier chats yet.'}
-        </p>` : `
+        <div class="center" style="padding:28px 0">
+          <p class="muted" style="margin:0 0 4px">
+            ${hidden.size
+              ? 'Your list is cleared on this device. Nothing has been deleted.'
+              : 'No earlier chats yet.'}
+          </p>
+          ${hidden.size ? '' : '<a class="btn primary mt-3" href="#/new">Start a complaint</a>'}
+        </div>` : `
         <div class="chatlist">
           ${visible.map((c) => `
             <div class="chatrow" data-open="${c.id}">
@@ -1409,57 +1448,53 @@ async function showHistory() {
                   ${c.submitted
                     ? `<span class="badge ok">${esc(c.reference)}</span>`
                     : statusChip(c.step)}
-                  &middot; ${c.turns} message(s) &middot; ${fmtDateTime(c.updatedAt)}
+                  &middot; ${c.turns} message(s)
+                  &middot; ${fmtDateTime(c.updatedAt)}
                 </span>
               </div>
               <button class="btn quiet" data-hide="${c.id}"
                       title="Remove from this list. The chat is not deleted.">&times;</button>
             </div>`).join('')}
-        </div>`}`;
+        </div>
+        <p class="small muted mt-3" style="margin-bottom:0">
+          Clearing the list only hides these on this device. Nothing is deleted.
+        </p>`}
+    </div>`;
 
-    $$('[data-open]', panel).forEach((row) => {
-      row.onclick = async (e) => {
-        if (e.target.closest('[data-hide]')) return;
-        state.activeConversationId = Number(row.dataset.open);
-        state.conversation = null;
-        await viewChat();
-      };
-    });
+  $$('[data-open]', body).forEach((row) => {
+    row.onclick = (e) => {
+      if (e.target.closest('[data-hide]')) return;
+      state.activeConversationId = Number(row.dataset.open);
+      state.conversation = null;
+      state.lastPipeline = null;
+      location.hash = '#/new';
+    };
+  });
 
-    $$('[data-hide]', panel).forEach((b) => {
-      b.onclick = (e) => {
-        e.stopPropagation();
-        hiddenChats.hide(b.dataset.hide);
-        showHistory();
-      };
-    });
+  $$('[data-hide]', body).forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      hiddenChats.hide(b.dataset.hide);
+      renderHistoryBody();
+    };
+  });
 
-    const clear = $('#clearChats');
-    if (clear) {
-      clear.onclick = () => {
-        hiddenChats.hideAll(visible.map((c) => c.id));
-        toast('List cleared on this device. No chat was deleted.', 'good');
-        showHistory();
-      };
-    }
-
-    const restore = $('#restoreChats');
-    if (restore) {
-      restore.onclick = () => {
-        hiddenChats.clear();
-        showHistory();
-      };
-    }
-  } catch (ex) {
-    panel.innerHTML = `<div class="notice bad">${esc(ex.message)}</div>`;
+  const clear = $('#clearChats');
+  if (clear) {
+    clear.onclick = () => {
+      hiddenChats.hideAll(visible.map((c) => c.id));
+      toast('List cleared on this device. No chat was deleted.', 'good');
+      renderHistoryBody();
+    };
   }
-}
 
-function toggleHistory() {
-  const panel = $('#historyPanel');
-  if (!panel) return;
-  if (panel.classList.contains('hidden')) showHistory();
-  else panel.classList.add('hidden');
+  const restore = $('#restoreChats');
+  if (restore) {
+    restore.onclick = () => {
+      hiddenChats.clear();
+      renderHistoryBody();
+    };
+  }
 }
 
 function statusChip(step) {
@@ -1508,7 +1543,8 @@ function wireSpeakToggle() {
   box.checked = speakPref.get();
   box.onchange = () => {
     speakPref.set(box.checked);
-    toast(box.checked ? 'The bot will read its replies aloud.' : 'The bot will stay quiet.');
+    // No toast: the checkbox already shows its own state, and a confirmation
+    // for every flip stacks over the composer the citizen is trying to use.
   };
 }
 
@@ -2263,6 +2299,7 @@ async function route() {
   try {
     if (hash.startsWith('#/g/')) return await viewDetail(decodeURIComponent(hash.slice(4)));
     if (hash === '#/new') return await viewChat();
+    if (hash === '#/chats') return await viewHistory();
     if (hash === '#/grievances') return await viewList();
     if (hash === '#/track') return viewTrack();
     if (hash === '#/profile') return viewProfile();
