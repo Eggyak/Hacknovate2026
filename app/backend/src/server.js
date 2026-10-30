@@ -14,6 +14,7 @@ import { chatRouter } from './routes/chat.js';
 import { speechRouter } from './routes/speech.js';
 import { grievanceRouter } from './routes/grievances.js';
 import { i18nRouter, i18nStats } from './routes/i18n.js';
+import { mobileRouter } from './routes/mobile.js';
 import { probe as speechProbe } from './services/azureSpeech.js';
 import { probe as translateProbe } from './services/translate.js';
 import { snapshot as mistralSnapshot } from './services/mistral.js';
@@ -85,6 +86,8 @@ app.use('/api/chat', chatRouter);
 app.use('/api/speech', speechRouter);
 app.use('/api/grievances', grievanceRouter);
 app.use('/api/i18n', i18nRouter);
+// The Android client's contract: what this portal is, and what to show.
+app.use('/api/mobile', mobileRouter);
 
 app.use(
   express.static(FRONTEND, {

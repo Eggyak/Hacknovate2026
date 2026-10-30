@@ -231,6 +231,119 @@ const intakeLimiter=(req,res,next)=>(hasServiceKey(req)?serviceIntakeLimiter:ano
 const serviceReadLimiter=rateLimit({windowMs:60*60*1000,limit:2000,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Service read limit reached.'}});
 const categoryDivisions=Object.fromEntries(divisions.map(([divisionId,,category])=>[category,divisionId]));
 /*
+ * The contract the Android client builds against.
+ *
+ * Mirrors /api/mobile on the citizen portal, so one app can read both with
+ * the same code and only the contents differ. The important difference is
+ * here: a citizen's app looks the same for everyone, and a staff app must
+ * not. A Ward Desk Officer and a Staff Admin are different jobs, and the
+ * modules below are derived from the role the SERVER resolved - never from
+ * anything the client claims.
+ *
+ * Hiding a control in an app is not access control; every route is still
+ * authorised on its own. This exists so the app does not draw a queue the
+ * officer will be refused from, which is a worse experience than not showing
+ * it and is how people conclude a system is broken.
+ */
+const MOBILE_API_VERSION=1;
+
+app.get('/api/mobile/manifest',(_req,res)=>{
+  res.json({
+    portal:'department',
+    apiVersion:MOBILE_API_VERSION,
+    title:'MHA Samadhan — Department Workspace',
+    subtitle:'Grievance Operations & Management',
+    accent:'#0a1220',
+    auth:{
+      kind:'staff',
+      flow:'key-password-otp',
+      // The app renders the form from this, so adding or dropping a factor
+      // does not require a new build.
+      steps:[
+        {id:'credentials',endpoint:'POST /api/auth/login',fields:[
+          ...(accessKeyRequired()?[{key:'accessKey',label:'Departmental access key',type:'password',required:true,help:'Issued to your department separately. Not your password.'}]:[]),
+          {key:'email',label:'Department email / Login ID',type:'email',required:true},
+          {key:'password',label:'Password',type:'password',required:true},
+        ]},
+        ...(process.env.N8N_OTP_WEBHOOK_URL?[{id:'verify',endpoint:'POST /api/auth/login/verify',fields:[
+          {key:'code',label:'One-time code',type:'otp',length:6,required:true,help:'Sent to the address on your staff record.'},
+        ]}]:[]),
+      ],
+      accessKeyRequired:accessKeyRequired(),
+      otpRequired:Boolean(process.env.N8N_OTP_WEBHOOK_URL),
+      session:{transport:'bearer',ttlSeconds:Math.round(sessionLifetime/1000),storage:'encrypted-prefs'},
+      selfSignUp:false,
+      note:'Staff accounts are created by a Staff Admin. There is no public registration.',
+    },
+    capabilities:{
+      translation:Boolean(process.env.AZURE_TRANSLATOR_KEY),
+      textSize:true,
+      citizenIntake:true,
+      evidenceUpload:false,
+    },
+    languages:PORTAL_LANGUAGES,
+    divisions:divisions.map(([id,name,category])=>({id,name,category})),
+  });
+});
+
+/**
+ * What this officer should see.
+ *
+ * Modules are derived from the resolved role's permissions and access level.
+ * toRole() has already stripped any permission above the level's ceiling, so
+ * what is read here is what the server will actually honour.
+ */
+app.get('/api/mobile/session',requireAuth,(req,res)=>{
+  const role=req.role;
+  const can=(p)=>role.permissions.includes(p);
+  const level=role.accessLevel;
+
+  const scopeLabel=
+    role.scopeType==='GLOBAL'?'All divisions and wards':
+    role.scopeType==='DIVISION'?`${(divisions.find(([id])=>id===role.divisionId)||[,role.divisionId])[1]}`:
+    `${(req.user.assignedWards||[]).length||role.wardIds.length} assigned ward(s)`;
+
+  const modules=[];
+  if(can('tickets:read')){
+    modules.push({id:'queue',label:level==='APPELLATE_AUTHORITY'?'Appeals':'Case queue',icon:'inbox',route:'/queue'});
+  }
+  if(can('analytics:view')){
+    modules.push({id:'analytics',label:'Analytics',icon:'chart',route:'/analytics'});
+    modules.push({id:'activity',label:'Activity',icon:'history',route:'/activity'});
+  }
+  // Admin management needs the protected role itself, not merely the
+  // permission label - the same rule the admin routes enforce.
+  if(req.user.roleId==='ROLE-SUPER-ADMIN'){
+    modules.push({id:'staff',label:'Staff & roles',icon:'people',route:'/staff'});
+  }
+  modules.push({id:'account',label:'Account',icon:'person',route:'/account'});
+
+  res.json({
+    portal:'department',
+    apiVersion:MOBILE_API_VERSION,
+    identity:{
+      id:req.user.id,name:req.user.name,email:req.user.email,
+      roleId:role.id,roleName:role.name,accessLevel:level,
+      scopeType:role.scopeType,divisionId:role.divisionId??null,
+      scopeLabel,
+      mustChangePassword:Boolean(getUserById.get(req.user.id)?.must_change_password),
+    },
+    // What the app may OFFER. Every route still authorises independently.
+    can:{
+      readTickets:can('tickets:read'),
+      resolve:can('tickets:resolve'),
+      reroute:can('tickets:reroute'),
+      viewAnalytics:can('analytics:view'),
+      manageStaff:req.user.roleId==='ROLE-SUPER-ADMIN',
+      // Only the triage desk may move an OTHER case, and it may not resolve.
+      routeOtherCases:level==='OTHER_CASE_TRIAGE'&&can('tickets:reroute'),
+    },
+    modules,
+    statuses:['PENDING','UNDER_INVESTIGATION','RESOLVED'],
+  });
+});
+
+/*
  * Interface translation for the workspace.
  *
  * The same contract the citizen portal uses, and for the same reason: staff
