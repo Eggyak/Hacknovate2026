@@ -388,10 +388,30 @@ export async function probe() {
     reason: r.reason,
     detail: r.detail,
     model: env.mistral.model,
-    hint: /http_(401|403)/.test(r.reason || '')
-      ? 'key rejected'
-      : /http_4/.test(r.reason || '')
-        ? 'this model may have zero quota on this account - try another model'
-        : undefined,
+    hint: hintFor(r),
   };
+}
+
+/**
+ * Turn a refusal into the thing you should actually do about it.
+ *
+ * The distinction that matters: a 403 carrying `tier_not_allowed` means the
+ * KEY IS FINE and this particular model is not included in the account's
+ * tier. Reading that as a bad key sends you off rotating credentials that
+ * were never the problem - which is the wrong half hour to spend, because
+ * the fix is one environment variable.
+ */
+function hintFor(r) {
+  const reason = r.reason || '';
+  const detail = r.detail || '';
+
+  if (/tier_not_allowed/.test(detail) || /not available in your subscription/i.test(detail)) {
+    return 'the key is valid; this MODEL is not in your tier. Change MISTRAL_MODEL, not the key.';
+  }
+  if (/http_401/.test(reason)) return 'key rejected - check MISTRAL_API_KEY';
+  if (/http_403/.test(reason)) return 'forbidden for this key, most likely a model or tier restriction';
+  if (reason === 'rate_limited') {
+    return 'rate limited. Free accounts meter PER MODEL, so another model on the same key may still work.';
+  }
+  return undefined;
 }
