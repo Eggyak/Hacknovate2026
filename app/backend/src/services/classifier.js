@@ -46,9 +46,34 @@ const URGENT_TERMS = [
 const LATIN = /^[\x20-\x7E]+$/;
 
 /**
- * Indic scripts inflect heavily and compound freely, so a substring match is
- * the right test there. Latin needs a word boundary or "otp" fires inside
- * "adopted".
+ * Viramas: the mark that strips a consonant of its inherent vowel. One per
+ * Indic script we support.
+ */
+const VIRAMA = /[्্੍્୍்్್്]$/;
+
+/**
+ * Reduce an Indic term to the stem that survives suffixation.
+ *
+ * Indic languages agglutinate, and when a suffix attaches to a word ending in
+ * a bare consonant, the virama is REPLACED by the suffix's vowel sign. Tamil
+ * cyclone is "புயல்", but "in the cyclone" is "புயலில்" - the ல் becomes லி,
+ * so the original term is no longer a substring of the inflected word and a
+ * literal match silently fails. The same happens to Hindi "बम" in "बमों",
+ * Malayalam, Odia and the rest.
+ *
+ * Dropping the trailing virama gives a stem that matches both the bare word
+ * and its inflected forms. It is a blunt instrument compared to a real
+ * morphological analyser, but it is the difference between routing a Tamil
+ * cyclone complaint and dropping it on the floor.
+ */
+function indicStem(term) {
+  return term.replace(VIRAMA, '');
+}
+
+/**
+ * Indic scripts inflect heavily and compound freely, so a substring match on
+ * the stem is the right test there. Latin needs a word boundary or "otp"
+ * fires inside "adopted".
  */
 function occurrences(haystackLower, haystackRaw, term) {
   if (LATIN.test(term)) {
@@ -56,11 +81,15 @@ function occurrences(haystackLower, haystackRaw, term) {
     const re = new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, 'g');
     return (haystackLower.match(re) || []).length;
   }
+
+  const needle = indicStem(term);
+  if (!needle) return 0;
+
   let count = 0;
-  let idx = haystackRaw.indexOf(term);
+  let idx = haystackRaw.indexOf(needle);
   while (idx !== -1) {
     count += 1;
-    idx = haystackRaw.indexOf(term, idx + term.length);
+    idx = haystackRaw.indexOf(needle, idx + needle.length);
   }
   return count;
 }

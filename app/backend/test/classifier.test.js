@@ -97,6 +97,32 @@ test('a citizen overriding the route always wins', () => {
   assert.equal(got.needsConfirmation, false);
 });
 
+test('matches inflected forms, not just dictionary forms', () => {
+  /*
+   * Indic suffixation replaces a word-final virama with the suffix's vowel
+   * sign, so the bare term stops being a substring of the inflected word.
+   * These are the forms a citizen actually writes - "in the cyclone", not
+   * "cyclone" - and each one previously failed to match.
+   */
+  const inflected = [
+    // Tamil: புயல் (cyclone) -> புயலில் (in the cyclone)
+    ['disaster', 'புயலில் எங்கள் வீடு இடிந்து விழுந்தது, நிவாரணமும் கிடைக்கவில்லை'],
+    // Hindi: बम (bomb) -> बमों (bombs, oblique)
+    ['counter_terror', 'आतंकवादियों ने बमों की धमकी दी है'],
+    // Malayalam: ബാങ്ക് -> ബാങ്കിൽ (in the bank)
+    ['cyber', 'എന്റെ ബാങ്കിൽ നിന്ന് സൈബർ തട്ടിപ്പിലൂടെ പണം പോയി'],
+    // Kannada: ಬ್ಯಾಂಕ್ -> ಬ್ಯಾಂಕಿನಿಂದ (from the bank)
+    ['cyber', 'ನನ್ನ ಬ್ಯಾಂಕಿನಿಂದ ಸೈಬರ್ ವಂಚನೆಯಿಂದ ಹಣ ಹೋಗಿದೆ'],
+  ];
+
+  const failures = [];
+  for (const [expected, text] of inflected) {
+    const got = classify(text);
+    if (got.divisionId !== expected) failures.push(`"${text.slice(0, 40)}" -> ${got.divisionId}`);
+  }
+  assert.deepEqual(failures, [], `inflected forms missed:\n${failures.join('\n')}`);
+});
+
 test('word boundaries are respected for Latin terms', () => {
   // "otp" must not fire inside "adopted", "ngo" not inside "among".
   const got = classify('The child was adopted among several families');
