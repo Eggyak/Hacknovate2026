@@ -9,6 +9,7 @@ RUN npm install --omit=dev --no-audit --no-fund
 COPY src ./src
 COPY migrations ./migrations
 COPY public ./public
+COPY test ./test
 
 # Uploaded evidence lives on a volume, not in the image.
 RUN mkdir -p /data/uploads && chown -R node:node /data /app
