@@ -5,33 +5,56 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MHA Samadhan</title>
 <meta name="description" content="Register a grievance with the Ministry of Home Affairs by voice or text, in fourteen Indian languages.">
-<meta name="theme-color" content="#0b2545">
+<meta name="theme-color" content="#0e1c2f">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@500;600&family=Noto+Sans+Devanagari:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;600;700&family=Noto+Sans+Tamil:wght@400;600;700&family=Noto+Sans+Telugu:wght@400;600;700&family=Noto+Sans+Kannada:wght@400;600;700&family=Noto+Sans+Malayalam:wght@400;600;700&family=Noto+Sans+Gujarati:wght@400;600;700&family=Noto+Sans+Gurmukhi:wght@400;600;700&family=Noto+Sans+Oriya:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&family=Noto+Sans+Devanagari:wght@400;600;700&family=Noto+Sans+Bengali:wght@400;600;700&family=Noto+Sans+Tamil:wght@400;600;700&family=Noto+Sans+Telugu:wght@400;600;700&family=Noto+Sans+Kannada:wght@400;600;700&family=Noto+Sans+Malayalam:wght@400;600;700&family=Noto+Sans+Gujarati:wght@400;600;700&family=Noto+Sans+Gurmukhi:wght@400;600;700&family=Noto+Sans+Oriya:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230b2545'/><text x='16' y='22' font-family='system-ui' font-size='15' font-weight='800' fill='white' text-anchor='middle'>MS</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230e1c2f'/><text x='16' y='14' font-family='system-ui' font-size='9' font-weight='800' fill='white' text-anchor='middle'>MHA</text><text x='16' y='25' font-family='system-ui' font-size='7' font-weight='600' fill='%23f0c040' text-anchor='middle'>SMD</text></svg>">
 </head>
 <body>
 
-<div class="tricolour"></div>
+<!-- Government of India identification strip, as required of an official portal. -->
+<div class="goi">
+  <div class="wrap goi-inner">
+    <div class="goi-id">
+      <span class="flag" aria-hidden="true"></span>
+      <span><b>भारत सरकार</b> | Government of India</span>
+      <span class="dot" aria-hidden="true">•</span>
+      <span><b>गृह मंत्रालय</b> | Ministry of Home Affairs</span>
+    </div>
+    <div class="goi-tools">
+      <div class="textsize" role="group" aria-label="Text size">
+        <span>Text size</span>
+        <button type="button" data-size="sm" aria-label="Smaller text">A-</button>
+        <button type="button" data-size="md" aria-label="Normal text" aria-pressed="true">A</button>
+        <button type="button" data-size="lg" aria-label="Larger text">A+</button>
+      </div>
+      <span class="goi-help">
+        <span aria-hidden="true">&#9742;</span>
+        Helpline <b>1930</b> / <b>1800-11-0031</b>
+      </span>
+    </div>
+  </div>
+</div>
 
 <header class="app">
   <div class="wrap">
     <div class="bar">
       <a class="brand" href="#/" aria-label="MHA Samadhan home">
-        <span class="seal" aria-hidden="true">MS</span>
-        <span>
-          <b>MHA Samadhan</b>
-          <span>Ministry of Home Affairs</span>
+        <span class="seal" aria-hidden="true"><b>MHA</b><i>समाधान</i></span>
+        <span class="brand-text">
+          <b>MHA Samadhan <span class="hi">/ एमएचए समाधान</span></b>
+          <span>Ministry of Home Affairs Grievance Redressal Portal &bull; Government of India</span>
         </span>
       </a>
 
       <nav class="main" id="nav" hidden></nav>
 
-      <div class="row" style="gap:8px;margin-inline-start:auto" id="headerRight"></div>
+      <div class="bar-right" id="headerRight"></div>
     </div>
   </div>
+  <div class="tricolour" aria-hidden="true"></div>
 </header>
 
 <main>
@@ -43,10 +66,24 @@
   </div>
 </main>
 
-<footer style="border-top:1px solid var(--line);padding:20px 0;margin-top:40px">
-  <div class="wrap row between wrap small muted">
-    <span>Grievances are answered within <b id="slaDays">21</b> days.</span>
-    <span id="capBar"></span>
+<footer class="site">
+  <div class="wrap foot-inner">
+    <div class="foot-id">
+      <span class="goi-seal" aria-hidden="true">GOI</span>
+      <span>
+        <b>Ministry of Home Affairs, Government of India</b>
+        <span>Portal maintained for National Citizen Services &bull; <span id="capBar"></span></span>
+      </span>
+    </div>
+    <nav class="foot-links" aria-label="Portal information">
+      <a href="#/track">Track a grievance</a>
+      <a href="#/help">Citizen charter</a>
+      <a href="#/help">Privacy</a>
+      <a href="#/help">Accessibility</a>
+    </nav>
+  </div>
+  <div class="wrap foot-note">
+    Grievances are answered within <b id="slaDays">21</b> days of filing.
   </div>
 </footer>
 

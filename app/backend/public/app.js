@@ -256,35 +256,88 @@ const speech = {
 function renderChrome() {
   const nav = $('#nav');
   const right = $('#headerRight');
+  const here = location.hash || '#/';
 
-  if (!state.citizen) {
+  if (state.citizen) {
+    nav.hidden = false;
+    const items = [
+      ['#/', 'Dashboard'],
+      ['#/new', 'Register'],
+      ['#/grievances', 'My grievances'],
+      ['#/track', 'Track'],
+    ];
+    nav.innerHTML = items
+      .map(([href, label]) => `<a href="${href}" class="${here === href ? 'on' : ''}">${label}</a>`)
+      .join('');
+  } else {
     nav.hidden = true;
-    right.innerHTML = '';
-    return;
   }
 
-  nav.hidden = false;
-  const here = location.hash || '#/';
-  const items = [
-    ['#/', 'Dashboard'],
-    ['#/new', 'Register'],
-    ['#/grievances', 'My grievances'],
-    ['#/track', 'Track'],
-  ];
-  nav.innerHTML = items
-    .map(([href, label]) => `<a href="${href}" class="${here === href ? 'on' : ''}">${label}</a>`)
-    .join('');
-
+  // The language picker belongs in the header whether or not anyone is signed
+  // in: a citizen who cannot read the English should be able to switch before
+  // they reach a form, not after.
+  const current = state.citizen?.preferred_language || localStorage.getItem('mha_lang') || 'en';
   right.innerHTML = `
-    <a class="btn quiet" href="#/profile" title="Profile">${esc(state.citizen.full_name || `+91 ${state.citizen.mobile}`)}</a>
-    <button class="btn quiet" id="signout">Sign out</button>`;
+    <span class="langpick">
+      <span aria-hidden="true">&#127758;</span>
+      <label class="sr" for="portalLang">Choose portal language</label>
+      <select id="portalLang">
+        ${state.languages.map((l) =>
+          `<option value="${l.code}" ${l.code === current ? 'selected' : ''}>${esc(l.native)}${l.code === 'en' ? '' : ` (${esc(l.name)})`}</option>`).join('')}
+      </select>
+    </span>
+    ${state.citizen ? `
+      <a class="btn quiet" href="#/profile">${esc(state.citizen.full_name || `+91 ${state.citizen.mobile}`)}</a>
+      <button class="btn quiet" id="signout">Sign out</button>` : ''}`;
 
-  $('#signout').onclick = async () => {
-    await api.post('/auth/signout');
-    state.citizen = null;
-    location.hash = '#/signin';
-    renderChrome();
+  $('#portalLang').onchange = async (e) => {
+    const code = e.target.value;
+    try { localStorage.setItem('mha_lang', code); } catch { /* private window */ }
+    const lang = state.languages.find((l) => l.code === code);
+    document.documentElement.setAttribute('dir', lang?.dir || 'ltr');
+    if (state.citizen) {
+      await api.patch('/auth/profile', { preferredLanguage: code });
+      state.citizen.preferred_language = code;
+      toast(`Portal language set to ${lang?.name}.`, 'good');
+    }
   };
+
+  const out = $('#signout');
+  if (out) {
+    out.onclick = async () => {
+      await api.post('/auth/signout');
+      state.citizen = null;
+      location.hash = '#/signin';
+      renderChrome();
+    };
+  }
+}
+
+/**
+ * Text size, from the Government of India strip.
+ *
+ * Everything in the stylesheet that matters is in rem, so moving the root
+ * moves the whole page. Remembered per browser, because someone who needs
+ * larger text needs it on every visit, not just this one.
+ */
+function wireTextSize() {
+  let saved = 'md';
+  try { saved = localStorage.getItem('mha_textsize') || 'md'; } catch { /* private window */ }
+  apply(saved);
+
+  function apply(size) {
+    document.documentElement.setAttribute('data-size', size);
+    $$('.textsize button').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.size === size));
+    });
+  }
+
+  $$('.textsize button').forEach((b) => {
+    b.onclick = () => {
+      apply(b.dataset.size);
+      try { localStorage.setItem('mha_textsize', b.dataset.size); } catch { /* ignore */ }
+    };
+  });
 }
 
 function renderCapabilities() {
@@ -317,9 +370,20 @@ function setView(html) {
  * asks for the number and the email together. Either way the number is proved
  * by a code before anything is written, and the verification state is shown
  * as it actually is rather than asserted.
+ *
+ * Labels are bilingual because the form is, and because a citizen reading the
+ * Hindi should not have to infer which box is which from the English.
  */
 
 const auth = { mode: 'signin', pending: null, timer: null, genders: [] };
+
+/** Where a code will actually go, which is not always where a form promises. */
+function deliveryNote(email) {
+  if (email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return 'A code will be sent to your email';
+  }
+  return 'A code will be sent by SMS';
+}
 
 function viewAuth(mode = 'signin') {
   auth.mode = mode === 'signup' ? 'signup' : 'signin';
@@ -330,41 +394,43 @@ function viewAuth(mode = 'signin') {
   setView(`
     <div class="auth">
       <aside class="pitch">
-        <span class="eyebrow">MHA Samadhan / एमएचए समाधान</span>
-        <h1>Your Voice Matters.<br>Your Grievance Matters.</h1>
+        <span class="eyebrow">MHA Samadhan / एमएचए समाधान <span class="sep">|</span> नागरिक अधिकार पत्र</span>
+
+        <h1>Your Voice Matters.<span class="gold">Your Grievance Matters.</span></h1>
         <div class="hi">आपकी आवाज़, आपका अधिकार।</div>
-        <p class="lede">Register your grievance, follow its progress, and receive the official
-          outcome through one portal.</p>
+        <p class="lede">Register your grievance directly with the Ministry of Home Affairs, follow
+          every stage of its progress, and receive the official outcome under a time-bound
+          statutory guarantee.</p>
 
         <div class="feat">
-          <span class="ico" aria-hidden="true">&#127908;</span>
-          <span><b>Speak or type</b>
+          <span class="ico a" aria-hidden="true">&#127908;</span>
+          <span><b>Speak or type naturally</b>
             <span>Describe what happened in your own words, by voice or text, in
-            ${h.counts.languages} Indian languages.</span></span>
+            ${h.counts.languages} Indian languages${h.capabilities.translation ? ' with automatic translation' : ''}.</span></span>
         </div>
         <div class="feat">
-          <span class="ico" aria-hidden="true">&#127758;</span>
-          <span><b>Routed automatically</b>
-            <span>Your complaint is read in your own language and sent to the right
-            one of ${h.counts.divisions} divisions.</span></span>
+          <span class="ico b" aria-hidden="true">&#128279;</span>
+          <span><b>Intelligently routed</b>
+            <span>Your complaint is read in your own language and sent to the right one of
+            ${h.counts.divisions} MHA divisions.</span></span>
         </div>
         <div class="feat">
-          <span class="ico" aria-hidden="true">&#9201;</span>
-          <span><b>${h.sla.days}-day deadline</b>
-            <span>Every step is logged and the clock is visible to you from the moment
+          <span class="ico c" aria-hidden="true">&#9201;</span>
+          <span><b>Guaranteed ${h.sla.days}-day timeline</b>
+            <span>Every stage is logged and the clock is visible to you from the moment
             you file.</span></span>
         </div>
 
         <div class="figures">
-          <div><b>${h.counts.languages}</b><span>LANGUAGES</span></div>
-          <div><b>${h.counts.divisions}</b><span>DIVISIONS</span></div>
-          <div><b>${h.sla.days}</b><span>DAY SLA</span></div>
+          <div><b>${h.counts.languages}</b><span>Languages</span></div>
+          <div><b>${h.counts.divisions}</b><span>Divisions</span></div>
+          <div><b>${h.sla.days}</b><span>Day SLA</span></div>
         </div>
 
         <div class="trust">
-          <span>&#128274; TLS ENCRYPTED</span>
-          <span>&#9878; DPDP ACT 2023</span>
-          <span>&#8226;&#8226;&#8226; NO PASSWORDS</span>
+          <span>&#128274; TLS encrypted</span>
+          <span>&#9878; DPDP Act 2023</span>
+          <span>&#128273; No passwords</span>
         </div>
       </aside>
 
@@ -380,43 +446,46 @@ function renderAuthCard() {
 
   const signup = auth.mode === 'signup';
   host.innerHTML = `
-    <div class="eyebrow">MHA Samadhan &middot; Citizen Gateway</div>
-    <h1 style="font-size:24px;margin:6px 0 4px">Welcome to MHA Samadhan</h1>
-    <p class="muted small mb-4" style="margin-bottom:20px">
-      ${signup ? 'Create an account to register and track grievances.'
-               : 'Sign in to register and track grievances.'}
+    <div class="eyebrow">MHA Samadhan &bull; Citizen Gateway</div>
+    <h1>Welcome to MHA Samadhan</h1>
+    <p class="sub">
+      ${signup
+        ? 'Create an account to register and track grievances. <span class="hi">/ नया खाता बनाएं।</span>'
+        : 'Sign in to register and track grievances. <span class="hi">/ शिकायत दर्ज करने और ट्रैक करने के लिए लॉगिन करें।</span>'}
     </p>
 
     <div class="segs mb-4" role="tablist">
-      <button role="tab" aria-selected="${!signup}" data-mode="signin">Login / प्रवेश</button>
-      <button role="tab" aria-selected="${signup}" data-mode="signup">Create Account / नया खाता</button>
+      <button role="tab" aria-selected="${!signup}" data-mode="signin">&#8594;] Login / प्रवेश</button>
+      <button role="tab" aria-selected="${signup}" data-mode="signup">&#43; Create Account / नया खाता</button>
     </div>
 
     <form id="authForm" novalidate>
       ${signup ? `
         <div class="field">
-          <label for="fullName">Full name <span style="color:var(--danger)">*</span></label>
-          <input id="fullName" type="text" autocomplete="name" required>
-          <div class="hint">As printed on your official identity document.</div>
+          <label for="fullName">Full name <span class="req">*</span>
+            <span class="hi">(आधिकारिक पहचान पत्र अनुसार)</span></label>
+          <input id="fullName" type="text" autocomplete="name"
+                 placeholder="Enter your legal name" required>
           <div class="err hidden" data-err="fullName"></div>
         </div>` : ''}
 
       <div class="field">
         <div class="row between">
-          <label for="mobile" style="margin:0">Mobile number <span style="color:var(--danger)">*</span></label>
-          <span class="small muted">10 digits</span>
+          <label for="mobile" style="margin:0">Mobile number <span class="req">*</span>
+            <span class="hi">/ मोबाइल नंबर</span></label>
+          <span class="aside">10 digits, Indian SIM</span>
         </div>
         <div class="phone-row" style="margin-top:6px">
-          <span class="cc">+91</span>
+          <span class="cc"><small>IN</small>+91</span>
           <input id="mobile" type="tel" inputmode="numeric" autocomplete="tel-national"
-                 maxlength="10" placeholder="Enter mobile number" required>
+                 maxlength="10" placeholder="Enter 10-digit mobile number" required>
         </div>
         <div class="err hidden" data-err="mobile"></div>
       </div>
 
       ${signup ? `
         <div class="field">
-          <label for="gender">Gender <span style="color:var(--danger)">*</span></label>
+          <label for="gender">Gender <span class="req">*</span> <span class="hi">/ लिंग</span></label>
           <select id="gender" required>
             <option value="">Select gender</option>
             ${auth.genders.map((g) => `<option value="${esc(g)}">${esc(g)}</option>`).join('')}
@@ -425,21 +494,24 @@ function renderAuthCard() {
         </div>` : ''}
 
       <div class="field">
-        <label for="email">
-          Email address ${signup ? '<span class="muted" style="font-weight:400">(optional)</span>'
-                                 : '<span style="color:var(--danger)">*</span>'}
-        </label>
+        <div class="row between">
+          <label for="email" style="margin:0">Email address
+            ${signup
+              ? '<span class="hi">(optional / वैकल्पिक)</span>'
+              : '<span class="req">*</span> <span class="hi">/ ईमेल</span>'}</label>
+          <span class="aside">${signup ? 'For your acknowledgment copy' : 'The address on your account'}</span>
+        </div>
         <input id="email" type="email" autocomplete="email" placeholder="name@example.com"
-               ${signup ? '' : 'required'}>
-        <div class="hint">${signup ? 'Used for grievance updates if you add one.'
-                                   : 'The address on your account.'}</div>
+               style="margin-top:6px" ${signup ? '' : 'required'}>
         <div class="err hidden" data-err="email"></div>
       </div>
 
       ${signup ? `
         <div class="field">
-          <label>Mobile verification</label>
-          <span class="vstate pending">Pending — we will send a code to this number</span>
+          <div class="vstrip" id="vstrip">
+            <span class="vstate pending">Mobile verification: Pending</span>
+            <span class="how" id="vhow">${deliveryNote('')}</span>
+          </div>
         </div>
         <div class="field">
           <label class="consent">
@@ -452,13 +524,19 @@ function renderAuthCard() {
 
       <div class="err hidden mb-3" data-err="_form"></div>
       <button class="btn primary block" type="submit" id="authBtn">
-        ${signup ? 'Verify mobile and create account' : 'Continue with mobile OTP'}
+        ${signup ? 'Verify mobile and create account' : 'Continue with mobile OTP / ओटीपी प्राप्त करें'}
       </button>
     </form>
 
     <div class="swap">
-      ${signup ? 'Already registered?<button type="button" data-swap="signin">Sign in here &rarr;</button>'
-               : 'First time here?<button type="button" data-swap="signup">Create an account &rarr;</button>'}
+      ${signup
+        ? 'Already registered? <span class="hi">पहले से पंजीकृत?</span><button type="button" data-swap="signin">Sign in here &rarr;</button>'
+        : 'First time here? <span class="hi">पहली बार आए हैं?</span><button type="button" data-swap="signup">Create an account &rarr;</button>'}
+    </div>
+
+    <div class="emergency">
+      For emergency assistance with cybercrime or financial fraud, call the
+      National Cyber Crime Helpline <b>1930</b> immediately.
     </div>`;
 
   $$('[data-mode]', host).forEach((b) => {
@@ -469,6 +547,11 @@ function renderAuthCard() {
   });
 
   $('#mobile').oninput = (e) => { e.target.value = e.target.value.replace(/\D/g, ''); };
+
+  // Keep the promise about where the code goes honest as they type.
+  const how = $('#vhow');
+  if (how) $('#email').oninput = (e) => { how.textContent = deliveryNote(e.target.value.trim()); };
+
   $('#authForm').onsubmit = submitAuth;
   return undefined;
 }
@@ -535,8 +618,8 @@ async function submitAuth(e) {
     if (!r.delivered) {
       toast(
         r.devCode
-          ? `SMS is not connected yet. Your code is ${r.devCode}.`
-          : 'The code could not be sent by SMS. Check the delivery service.',
+          ? `Delivery is not connected yet. Your code is ${r.devCode}.`
+          : 'The code could not be delivered. Check the delivery service.',
         r.devCode ? 'warn' : 'bad',
       );
       if (r.devCode) fillOtp(r.devCode);
@@ -554,6 +637,8 @@ async function submitAuth(e) {
         renderAuthCard();
         $('#mobile').value = carried.mobile;
         $('#email').value = carried.email;
+        const how = $('#vhow');
+        if (how) how.textContent = deliveryNote(carried.email);
         $('#fullName').focus();
       }, 1200);
     } else if (ex.code === 'already_registered') {
@@ -569,26 +654,30 @@ async function submitAuth(e) {
       showErr('_form', ex.message);
     }
     btn.disabled = false;
-    btn.textContent = signup ? 'Verify mobile and create account' : 'Continue with mobile OTP';
+    btn.textContent = signup ? 'Verify mobile and create account' : 'Continue with mobile OTP / ओटीपी प्राप्त करें';
   }
 }
 
 function renderOtpStep(host) {
-  const { masked, mode } = auth.pending;
+  const { masked, mode, channel, email } = auth.pending;
+  const byEmail = channel === 'email' && email;
 
   host.innerHTML = `
-    <div class="eyebrow">Secure session</div>
-    <h1 style="font-size:24px;margin:6px 0 4px">Enter the 6-digit code</h1>
-    <p class="muted small" style="margin-bottom:20px">
-      ${auth.pending.channel === 'email' && auth.pending.email
-        ? `Sent by email to <b>${esc(auth.pending.email)}</b>.`
+    <div class="eyebrow">MHA Samadhan &bull; Secure session</div>
+    <h1>Enter the 6-digit code</h1>
+    <p class="sub">
+      ${byEmail
+        ? `Sent by email to <b>${esc(email)}</b>.`
         : `Sent by SMS to <b class="tnum">${esc(masked)}</b>.`}
       <button type="button" class="btn quiet" id="changeNum"
               style="min-height:auto;padding:0 4px">Change</button>
     </p>
 
     <div class="field">
-      <span class="vstate pending" id="vstate">Awaiting verification</span>
+      <div class="vstrip" id="vstrip">
+        <span class="vstate pending">Mobile verification: Awaiting code</span>
+        <span class="how">Valid for 5 minutes</span>
+      </div>
     </div>
 
     <form id="otpForm" novalidate>
@@ -598,12 +687,16 @@ function renderOtpStep(host) {
         <div class="err hidden center mt-3" data-err="code"></div>
       </div>
       <button class="btn primary block" type="submit" id="verifyBtn">
-        ${mode === 'signup' ? 'Verify and create account' : 'Verify and sign in'}
+        ${mode === 'signup' ? 'Verify and create account' : 'Verify and enter grievance dashboard'}
       </button>
     </form>
 
     <div class="center mt-3">
       <button type="button" class="btn quiet" id="resendBtn" disabled>Resend code</button>
+    </div>
+
+    <div class="emergency">
+      Never share this code. MHA staff will never ask you for it.
     </div>`;
 
   const boxes = buildOtpBoxes();
@@ -672,6 +765,7 @@ function startResend(seconds) {
     btn.disabled = true;
     try {
       const r = await api.post('/auth/start', auth.pending.body);
+      auth.pending.channel = r.channel;
       startResend(60);
       if (r.devCode) { toast(`Your code is ${r.devCode}.`, 'warn'); fillOtp(r.devCode); }
     } catch (ex) {
@@ -695,8 +789,12 @@ async function verifyOtp(e) {
     const r = await api.post('/auth/verify', { mobile: auth.pending.mobile, code });
     state.citizen = r.citizen;
 
-    const v = $('#vstate');
-    if (v) { v.className = 'vstate done'; v.textContent = 'Mobile verified'; }
+    const strip = $('#vstrip');
+    if (strip) {
+      strip.className = 'vstrip done';
+      strip.innerHTML = '<span class="vstate done">Mobile verified</span>'
+        + '<span class="how">Opening your dashboard</span>';
+    }
 
     clearInterval(auth.timer);
     auth.pending = null;
@@ -707,7 +805,9 @@ async function verifyOtp(e) {
     $$('#otpBoxes input').forEach((b) => { b.value = ''; });
     $('#d0')?.focus();
     btn.disabled = false;
-    btn.textContent = auth.pending?.mode === 'signup' ? 'Verify and create account' : 'Verify and sign in';
+    btn.textContent = auth.pending?.mode === 'signup'
+      ? 'Verify and create account'
+      : 'Verify and enter grievance dashboard';
   }
 }
 
@@ -1635,6 +1735,7 @@ async function boot() {
     state.divisions = divs.divisions;
     auth.genders = genders.genders;
     renderCapabilities();
+    wireTextSize();
   } catch {
     setView('<div class="notice bad">The service is not reachable. Please try again shortly.</div>');
     return;
