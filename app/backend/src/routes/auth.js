@@ -17,6 +17,7 @@ import { query } from '../lib/db.js';
 import { issueSession, clearSession, requireCitizen } from '../lib/auth.js';
 import { requestCode, verifyCode, normaliseMobile, OtpError } from '../services/otp.js';
 import { byCode } from '../data/languages.js';
+import { env } from '../lib/env.js';
 
 export const authRouter = Router();
 
@@ -176,10 +177,25 @@ authRouter.post('/verify', verifyLimiter, async (req, res, next) => {
     );
 
     const citizen = upserted.rows[0];
-    issueSession(res, citizen);
+    /*
+     * The cookie is for the browser; the token is for everything else.
+     *
+     * A native client has no cookie jar worth relying on and would otherwise
+     * have to scrape Set-Cookie, so the token is returned in the body too and
+     * sent back as `Authorization: Bearer`. Both carry the same claims and the
+     * same expiry - this is one session described two ways, not two sessions.
+     */
+    const token = issueSession(res, citizen);
 
     const isNew = new Date(citizen.created_at).getTime() > Date.now() - 5000;
-    return res.json({ ok: true, citizen, isNew, profileComplete: Boolean(citizen.full_name) });
+    return res.json({
+      ok: true,
+      citizen,
+      isNew,
+      profileComplete: Boolean(citizen.full_name),
+      token,
+      expiresInSeconds: env.jwt.ttlSeconds,
+    });
   } catch (err) {
     try {
       return handleOtpError(err, res);
