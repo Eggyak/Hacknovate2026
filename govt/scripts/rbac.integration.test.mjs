@@ -91,7 +91,19 @@ before(async () => {
   apiBase = `http://127.0.0.1:${apiPort}`;
   apiProcess = spawn(process.execPath, ['server/index.js'], {
     cwd: process.cwd(),
-    env: { ...process.env, API_PORT: String(apiPort), MHA_DATABASE_PATH: databasePath, NODE_ENV: 'test' },
+    // A fixture must not inherit the deployment's secrets. Without this the
+    // suite signs in against whatever access key and OTP channel the real
+    // container happens to have configured, and fails for reasons that have
+    // nothing to do with the scope rules it exists to check.
+    env: {
+      ...process.env,
+      API_PORT: String(apiPort),
+      MHA_DATABASE_PATH: databasePath,
+      NODE_ENV: 'test',
+      MHA_STAFF_ACCESS_KEY: '',
+      N8N_OTP_WEBHOOK_URL: '',
+      MHA_INTAKE_SERVICE_KEY: '',
+    },
     stdio: 'ignore',
   });
   await waitForApi();

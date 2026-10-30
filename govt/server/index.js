@@ -108,6 +108,26 @@ app.post('/api/auth/login',loginLimiter,async(req,res)=>{
   const role=toRole(getRoleById.get(row.role_id));
   if(!role)return res.status(403).json({error:'No active role is assigned to this account.'});
 
+  /*
+   * If there is no way to deliver a code, do not demand one.
+   *
+   * Requiring a second factor that physically cannot be sent does not make
+   * the workspace safer - it makes it unusable, which is how a local
+   * prototype run from START_MHA_DASHBOARD.bat would lock its own operator
+   * out. The access key above still applies, and the moment a delivery
+   * channel is configured the code becomes mandatory again.
+   */
+  if(!process.env.N8N_OTP_WEBHOOK_URL){
+    const token=randomBytes(32).toString('base64url');const expires=Date.now()+sessionLifetime;const now=new Date().toISOString();
+    db.transaction(()=>{
+      db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)').run(hash(token),row.id,expires,Date.now());
+      db.prepare('UPDATE users SET last_sign_in=? WHERE id=?').run(now,row.id);
+      audit(row.id,'SIGN_IN',`${row.name} signed in (no one-time code channel configured).`);
+    })();
+    const user=toUser(getUserById.get(row.id));
+    return res.json({user,role,mustChangePassword:Boolean(row.must_change_password),token});
+  }
+
   const challenge=issueChallenge(db,row.id);
   const delivery=await deliverCode({code:challenge.code,email:row.email,mobile:row.mobile_number,name:row.name});
   audit(row.id,'SIGN_IN_CHALLENGE',`One-time code issued for ${row.email}.`);
@@ -153,7 +173,7 @@ app.post('/api/auth/login/verify',loginLimiter,(req,res)=>{
 /** Does this deployment ask for an access key? The form needs to know. */
 app.get('/api/auth/policy',(_req,res)=>res.json({
   accessKeyRequired:accessKeyRequired(),
-  otpRequired:true,
+  otpRequired:Boolean(process.env.N8N_OTP_WEBHOOK_URL),
 }));
 
 app.get('/api/auth/me',requireAuth,(req,res)=>res.json({user:req.user,role:req.role}));
