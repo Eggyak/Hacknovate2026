@@ -66,9 +66,41 @@ services:
       # or any workflow already running there.
       - n8n
 
+  # The department workspace: React + Express + SQLite, built by Yash and
+  # deployed alongside the citizen portal rather than inside it. They share
+  # nothing but the intake call - separate processes, separate databases,
+  # separate hostnames - which keeps a staff-side fault away from the door
+  # citizens file complaints through.
+  mha-govt:
+    build: ./govt
+    image: mha-govt-workspace:latest
+    container_name: mha-govt
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: 8130
+      API_HOST: 0.0.0.0
+      MHA_DATABASE_PATH: /data/mha-grievance.sqlite
+      # Shared with the citizen portal so intake can prove who it is.
+      MHA_INTAKE_SERVICE_KEY: ${MHA_INTAKE_SERVICE_KEY:-}
+      MHA_STAFF_ACCESS_KEY: ${MHA_STAFF_ACCESS_KEY:-}
+      N8N_OTP_WEBHOOK_URL: ${N8N_OTP_WEBHOOK_URL:-}
+      N8N_OTP_API_KEY: ${N8N_OTP_API_KEY:-}
+      AZURE_TRANSLATOR_KEY: ${AZURE_TRANSLATOR_KEY:-}
+      AZURE_TRANSLATOR_REGION: ${AZURE_TRANSLATOR_REGION:-}
+    volumes:
+      - mha-govt-data:/data
+    ports:
+      - "127.0.0.1:8130:8130"
+    networks:
+      - mha-internal
+      - edge
+      - n8n
+
 volumes:
   mha-pgdata:
   mha-uploads:
+  mha-govt-data:
 
 networks:
   mha-internal:
