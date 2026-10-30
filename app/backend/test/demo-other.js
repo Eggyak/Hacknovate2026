@@ -107,6 +107,13 @@ async function main() {
     return 'We do not have that information';
   };
 
+  for (const question of questions) {
+    const answer = answerFor(question.label);
+    say('citizen', answer);
+    const r = await api(`/chat/${id}/message`, { method: 'POST', body: { text: answer, inputMode: 'text' } });
+    say('bot', r.data.bot.text);
+  }
+
   for (const [label, text] of [['pincode', '144211'], ['district', 'Hoshiarpur'],
     ['address', 'Main Bazaar, Mukerian, Punjab']]) {
     say('citizen', text);
@@ -131,7 +138,10 @@ async function main() {
       [done.data.reference])).rows[0];
     console.log('  subject   :', g.subject);
     console.log('\n  stored, as an officer would read it:');
-    for (const [k, v] of Object.entries(g.dynamic_details || {})) {
+    const order = Object.keys(g.dynamic_labels || {});
+    const entries = Object.entries(g.dynamic_details || {})
+      .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+    for (const [k, v] of entries) {
       console.log(`    ${g.dynamic_labels?.[k] || k}`);
       console.log(`      -> ${v}`);
     }
