@@ -2006,7 +2006,15 @@ async function viewDetail(reference) {
   }
 
   const details = Object.entries(g.dynamic_details || {});
-  const fieldLabel = (key) => (g.division?.fields || []).find((f) => f.key === key)?.label || key;
+  /*
+   * A listed division names its own fields. An unlisted complaint was asked
+   * questions written for it, which were stored alongside the answers - and
+   * without them this table is a column of snake_case keys that mean nothing
+   * to the citizen who answered them.
+   */
+  const fieldLabel = (key) => (g.division?.fields || []).find((f) => f.key === key)?.label
+    || g.dynamic_labels?.[key]
+    || key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
   setView(`
     <div class="measure">
