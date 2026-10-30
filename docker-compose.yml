@@ -59,6 +59,10 @@ services:
     networks:
       - mha-internal
       - edge
+      # Joined only so the API can POST an OTP to the n8n webhook by container
+      # name. This adds mha-api to that network; it changes nothing about n8n
+      # or any workflow already running there.
+      - n8n
 
 volumes:
   mha-pgdata:
@@ -69,3 +73,6 @@ networks:
     driver: bridge
   edge:
     external: true
+  n8n:
+    external: true
+    name: n8n-kmar_default

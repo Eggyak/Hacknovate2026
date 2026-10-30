@@ -1,0 +1,125 @@
+{
+  "id": "MHASamadhanOTP1",
+  "name": "MHA_Samadhan_OTP",
+  "active": true,
+  "settings": { "executionOrder": "v1" },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mha/otp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "mha-otp-webhook",
+      "name": "OTP In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-240, 0],
+      "webhookId": "mha-samadhan-otp"
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * Authenticate the caller and build the message.\n *\n * This workflow can send a real SMS to any number it is handed, so the key\n * check is the only thing standing between the portal's OTP channel and an\n * open SMS relay. It runs before anything else and fails closed.\n */\nconst crypto = require('crypto');\nconst KEY = '__OTP_API_KEY__';\n\nconst item = $input.first().json;\nconst hdr = item.headers || {};\nconst b = item.body || {};\n\n// Compare digests rather than strings: timingSafeEqual throws on a length\n// mismatch, and that throw would itself leak how long the secret is.\nconst given = crypto.createHash('sha256').update(String(hdr['x-api-key'] || '')).digest();\nconst want = crypto.createHash('sha256').update(KEY).digest();\nif (!crypto.timingSafeEqual(given, want)) {\n  return [{ json: { ok: false, error: 'Not authorised.' } }];\n}\n\n// Indian mobile, in E.164. Anything else is refused rather than dialled.\nconst e164 = String(b.e164 || '').trim();\nif (!/^\\+91[6-9][0-9]{9}$/.test(e164)) {\n  return [{ json: { ok: false, error: 'A valid +91 mobile number is required.' } }];\n}\n\n// Six digits and nothing else. The text below is sent verbatim, so anything\n// that is not a code has no business reaching it.\nconst code = String(b.code || '');\nif (!/^[0-9]{6}$/.test(code)) {\n  return [{ json: { ok: false, error: 'A six-digit code is required.' } }];\n}\n\nconst minutes = Math.max(1, Math.round(Number(b.ttlSeconds || 300) / 60));\nconst sms = `${code} is your MHA Samadhan verification code. It expires in ${minutes} minute${minutes === 1 ? '' : 's'}. Do not share it with anyone.`;\n\nreturn [{ json: { ok: true, phone_e164: e164, sms, purpose: String(b.purpose || 'login') } }];"
+      },
+      "id": "mha-otp-checkkey",
+      "name": "Check Key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            {
+              "id": "allowed",
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true },
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "mha-otp-allowed",
+      "name": "Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "resource": "sms",
+        "operation": "send",
+        "from": "+14154497491",
+        "to": "={{ $('Check Key').first().json.phone_e164 }}",
+        "message": "={{ $('Check Key').first().json.sms }}",
+        "options": {}
+      },
+      "id": "mha-otp-sms",
+      "name": "Send SMS",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [420, -100],
+      "credentials": {
+        "twilioApi": { "id": "jX9mHOCEiA0ugAqo", "name": "Twilio account" }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, delivered: true, channel: 'sms', sid: $json.sid || null }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "mha-otp-sent",
+      "name": "Sent",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [660, -180]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, delivered: false, channel: 'sms', error: 'Twilio rejected the message.' }) }}",
+        "options": { "responseCode": 502 }
+      },
+      "id": "mha-otp-smsfailed",
+      "name": "SMS Failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [660, -20]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, delivered: false, error: $json.error || 'Refused.' }) }}",
+        "options": { "responseCode": 401 }
+      },
+      "id": "mha-otp-refused",
+      "name": "Refused",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [420, 140]
+    }
+  ],
+  "connections": {
+    "OTP In": { "main": [[{ "node": "Check Key", "type": "main", "index": 0 }]] },
+    "Check Key": { "main": [[{ "node": "Allowed?", "type": "main", "index": 0 }]] },
+    "Allowed?": {
+      "main": [
+        [{ "node": "Send SMS", "type": "main", "index": 0 }],
+        [{ "node": "Refused", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send SMS": {
+      "main": [
+        [{ "node": "Sent", "type": "main", "index": 0 }],
+        [{ "node": "SMS Failed", "type": "main", "index": 0 }]
+      ]
+    }
+  }
+}
