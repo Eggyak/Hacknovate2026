@@ -19,6 +19,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
  && apk del python3 make g++
 COPY server ./server
+# The RBAC suite ships too: it is the only check that the scope rules still
+# hold, and it has to be runnable against the image that actually deploys.
+COPY scripts ./scripts
 COPY --from=build /app/dist ./dist
 
 # SQLite lives on a volume, not in the image.
