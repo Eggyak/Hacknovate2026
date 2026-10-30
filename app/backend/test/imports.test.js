@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
@@ -32,11 +32,9 @@ function walk(dir) {
   return out;
 }
 
-const files = walk(SRC)
-  // server.js binds a port and starts timers; importing it would start a
-  // second instance beside the one already serving.
-  .filter((f) => !f.endsWith(`${'src'}${process.platform === 'win32' ? '\' : '/'}server.js`))
-  .filter((f) => !f.endsWith('server.js'));
+// server.js binds a port and starts timers; importing it would stand up a
+// second instance beside the one already serving.
+const files = walk(SRC).filter((f) => basename(f) !== 'server.js');
 
 test('every module resolves and binds its imports', async () => {
   const failures = [];
