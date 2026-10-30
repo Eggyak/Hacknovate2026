@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { mountPortalTools } from './portalTools';
 import type { AccessLevel, Permission, Role, Ticket, TicketStatus, User, Ward } from './types/grievance';
 import { roles as initialRoles, tickets as initialTickets, wards as initialWards } from './data/mockData';
 
@@ -234,6 +235,9 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    // Text size and language, available on every screen including sign-in.
+    mountPortalTools();
+
     // Whether this deployment asks for a departmental access key is the
     // server's decision, not the form's; ask rather than assume.
     api<{ accessKeyRequired: boolean }>('/api/auth/policy')

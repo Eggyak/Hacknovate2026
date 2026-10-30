@@ -201,6 +201,72 @@ const intakeLimiter=(req,res,next)=>(hasServiceKey(req)?serviceIntakeLimiter:ano
 const serviceReadLimiter=rateLimit({windowMs:60*60*1000,limit:2000,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Service read limit reached.'}});
 const categoryDivisions=Object.fromEntries(divisions.map(([divisionId,,category])=>[category,divisionId]));
 /*
+ * Interface translation for the workspace.
+ *
+ * The same contract the citizen portal uses, and for the same reason: staff
+ * at a district desk are not all comfortable reading an English interface,
+ * and a grievance system that only its English-reading officers can operate
+ * narrows who can be an officer.
+ *
+ * A batching cache in front of Azure Translator. The chrome is a closed set
+ * of a few hundred strings, so the first officer to pick Odia pays for it and
+ * everyone after is served from memory. Misses are cached as misses, so an
+ * untranslatable string is not re-requested on every render.
+ *
+ * Case text is NOT translated through here. A complaint is evidence and is
+ * shown as the citizen wrote it, with the English rendering the citizen
+ * portal already produced beside it.
+ */
+const PORTAL_LANGUAGES=['en','hi','bn','ta','te','mr','gu','kn','ml','pa','or','as','ur','ne'];
+const uiTranslationCache=new Map();
+const UI_CACHE_MAX=20000;
+
+const uiTranslateLimiter=rateLimit({windowMs:60*1000,limit:30,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Translation limit reached.'}});
+
+app.get('/api/i18n/languages',(_req,res)=>res.json({
+  languages:PORTAL_LANGUAGES,
+  enabled:Boolean(process.env.AZURE_TRANSLATOR_KEY),
+}));
+
+app.post('/api/i18n',uiTranslateLimiter,async(req,res)=>{
+  const to=String(req.body?.to??'').trim();
+  if(!PORTAL_LANGUAGES.includes(to))return res.status(400).json({error:'Not a portal language.'});
+  if(to==='en')return res.json({translations:{},language:'en'});
+  const key=process.env.AZURE_TRANSLATOR_KEY??'';
+  if(!key)return res.status(503).json({error:'Interface translation is not configured.'});
+
+  const texts=Array.isArray(req.body?.texts)?req.body.texts:[];
+  const wanted=[...new Set(texts.map(t=>String(t??'').trim()).filter(t=>t.length>0&&t.length<=400))].slice(0,600);
+
+  const translations={};const missing=[];
+  for(const text of wanted){
+    const hit=uiTranslationCache.get(`${to}|${text}`);
+    if(hit!==undefined){if(hit)translations[text]=hit;}else missing.push(text);
+  }
+
+  try{
+    for(let i=0;i<missing.length;i+=90){
+      const group=missing.slice(i,i+90);
+      const url=new URL('/translate','https://api.cognitive.microsofttranslator.com');
+      url.searchParams.set('api-version','3.0');url.searchParams.set('from','en');url.searchParams.set('to',to);url.searchParams.set('textType','plain');
+      const headers={'Ocp-Apim-Subscription-Key':key,'Content-Type':'application/json'};
+      if(process.env.AZURE_TRANSLATOR_REGION)headers['Ocp-Apim-Subscription-Region']=process.env.AZURE_TRANSLATOR_REGION;
+      const r=await fetch(url,{method:'POST',headers,body:JSON.stringify(group.map(t=>({Text:t}))),signal:AbortSignal.timeout(20000)});
+      if(!r.ok)return res.status(502).json({error:`Translator returned ${r.status}.`});
+      const data=await r.json();
+      group.forEach((text,n)=>{
+        const value=data?.[n]?.translations?.[0]?.text??null;
+        if(uiTranslationCache.size>=UI_CACHE_MAX){const oldest=uiTranslationCache.keys().next().value;if(oldest!==undefined)uiTranslationCache.delete(oldest);}
+        uiTranslationCache.set(`${to}|${text}`,value);
+        if(value)translations[text]=value;
+      });
+    }
+  }catch(error){return res.status(502).json({error:`Translation failed: ${error.message}`});}
+
+  res.json({language:to,translations,cached:wanted.length-missing.length,fetched:missing.length});
+});
+
+/*
  * Service-to-service endpoints for the citizen portal.
  *
  * The integration guide records that citizen tracking is not implemented and
