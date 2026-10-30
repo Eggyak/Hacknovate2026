@@ -119,7 +119,7 @@ authRouter.post('/start', startLimiter, async (req, res, next) => {
       profile = existing.email ? {} : { email: email.toLowerCase() };
     }
 
-    const result = await requestCode(mobile, { purpose: 'login', profile });
+    const result = await requestCode(mobile, { purpose: 'login', profile, email });
 
     return res.json({
       ok: true,
@@ -131,6 +131,7 @@ authRouter.post('/start', startLimiter, async (req, res, next) => {
       ttlSeconds: result.ttlSeconds,
       resendAfter: 60,
       delivered: result.delivery.delivered,
+      channel: result.delivery.channel || null,
       // Present only when delivery failed, so the UI can say what went wrong
       // instead of showing a code-entry box for a message that never arrived.
       deliveryIssue: result.delivery.delivered ? null : result.delivery.reason,

@@ -88,9 +88,28 @@ docker exec n8n-kmar-n8n-1 n8n list:workflow --active=true
 
 There were 14 active workflows before this project; there should be 15 now.
 
-**Twilio is a trial account** and will only deliver to numbers verified in the
-Twilio console. Verify your test number there, or upgrade the account, before
-expecting an SMS to arrive.
+**Email is the primary channel.** A Twilio trial account silently refuses
+every number it has not been shown beforehand, which makes SMS useless for a
+citizen signing in for the first time. Both sign-up and sign-in collect an
+email address, so the workflow sends the code by email (reusing the SMTP
+credential already on the box) and falls back to SMS only when no address is
+available or the email fails. The response names the channel that carried it,
+and the OTP screen tells the citizen where to look.
+
+Twilio still works for numbers verified in its console, and nothing has to
+change if the account is later upgraded.
+
+## Never do this
+
+```
+docker exec mha-db psql -U mha -d mha_samadhan -c "DELETE FROM citizens"
+```
+
+`citizens` cascades to `grievances`, so this erases every real complaint on
+the box along with the accounts that filed them. Both test suites create and
+delete only their own rows, so there is never a reason to run a blanket
+delete after them. If test data does need clearing, delete by the numbers the
+suites use (`90000000xx`), never the whole table.
 
 ## Backups
 

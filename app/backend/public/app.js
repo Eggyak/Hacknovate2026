@@ -529,7 +529,7 @@ async function submitAuth(e) {
     const r = await api.post('/auth/start', body);
     // Keep the accepted body: a resend has to re-state everything the server
     // validated the first time, and the citizen should not retype it.
-    auth.pending = { mobile, masked: r.mobile, mode: auth.mode, name: r.name, body };
+    auth.pending = { mobile, masked: r.mobile, mode: auth.mode, name: r.name, body, channel: r.channel, email };
     renderAuthCard();
 
     if (!r.delivered) {
@@ -542,8 +542,32 @@ async function submitAuth(e) {
       if (r.devCode) fillOtp(r.devCode);
     }
   } catch (ex) {
-    if (ex.errors) ex.errors.forEach((x) => showErr(x.field, x.message));
-    else showErr('_form', ex.message);
+    if (ex.errors) {
+      ex.errors.forEach((x) => showErr(x.field, x.message));
+    } else if (ex.code === 'no_account') {
+      // Telling someone to create an account and leaving them on the wrong
+      // form is how people give up. Carry their details across instead.
+      showErr('_form', 'No account for this number yet. Opening the sign-up form with your details.');
+      const carried = { mobile, email };
+      setTimeout(() => {
+        auth.mode = 'signup';
+        renderAuthCard();
+        $('#mobile').value = carried.mobile;
+        $('#email').value = carried.email;
+        $('#fullName').focus();
+      }, 1200);
+    } else if (ex.code === 'already_registered') {
+      showErr('_form', 'This number already has an account. Switching you to sign in.');
+      const carried = { mobile, email };
+      setTimeout(() => {
+        auth.mode = 'signin';
+        renderAuthCard();
+        $('#mobile').value = carried.mobile;
+        $('#email').value = carried.email;
+      }, 1200);
+    } else {
+      showErr('_form', ex.message);
+    }
     btn.disabled = false;
     btn.textContent = signup ? 'Verify mobile and create account' : 'Continue with mobile OTP';
   }
@@ -556,7 +580,9 @@ function renderOtpStep(host) {
     <div class="eyebrow">Secure session</div>
     <h1 style="font-size:24px;margin:6px 0 4px">Enter the 6-digit code</h1>
     <p class="muted small" style="margin-bottom:20px">
-      Sent by SMS to <b class="tnum">${esc(masked)}</b>.
+      ${auth.pending.channel === 'email' && auth.pending.email
+        ? `Sent by email to <b>${esc(auth.pending.email)}</b>.`
+        : `Sent by SMS to <b class="tnum">${esc(masked)}</b>.`}
       <button type="button" class="btn quiet" id="changeNum"
               style="min-height:auto;padding:0 4px">Change</button>
     </p>

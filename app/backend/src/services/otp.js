@@ -66,7 +66,7 @@ async function verifyHash(code, stored) {
  * resend can reuse the window, and the caller is told delivery failed rather
  * than being shown a success screen for a message that never left.
  */
-async function deliver({ mobile, code, purpose }) {
+async function deliver({ mobile, code, purpose, email }) {
   if (!env.otp.webhookUrl) {
     return { delivered: false, channel: null, reason: 'otp_webhook_not_configured' };
   }
@@ -81,6 +81,11 @@ async function deliver({ mobile, code, purpose }) {
       body: JSON.stringify({
         mobile,
         e164: `+91${mobile}`,
+        // Email is the primary channel. A Twilio trial account silently
+        // refuses every number it has not been shown beforehand, which makes
+        // SMS useless for a citizen signing in for the first time, and the
+        // address is something both sign-up and sign-in already collect.
+        email: email || '',
         code,
         purpose,
         ttlSeconds: env.otp.ttlSeconds,
@@ -108,7 +113,7 @@ async function deliver({ mobile, code, purpose }) {
  * codes one number may be issued in an hour. Both are enforced in the
  * database, so they survive a restart and apply across processes.
  */
-export async function requestCode(mobileInput, { purpose = 'login', profile = {} } = {}) {
+export async function requestCode(mobileInput, { purpose = 'login', profile = {}, email = '' } = {}) {
   const mobile = normaliseMobile(mobileInput);
 
   const recent = await query(
@@ -149,7 +154,7 @@ export async function requestCode(mobileInput, { purpose = 'login', profile = {}
 
   const code = generateCode(env.otp.length);
   const codeHash = await hashCode(code, randomBytes(16).toString('hex'));
-  const delivery = await deliver({ mobile, code, purpose });
+  const delivery = await deliver({ mobile, code, purpose, email: email || profile.email || '' });
 
   const inserted = await query(
     `INSERT INTO otp_codes (mobile, code_hash, purpose, expires_at, delivery, profile)
