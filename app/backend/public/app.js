@@ -582,9 +582,11 @@ function renderChrome() {
 /**
  * Text size, from the Government of India strip.
  *
- * Everything in the stylesheet that matters is in rem, so moving the root
- * moves the whole page. Remembered per browser, because someone who needs
- * larger text needs it on every visit, not just this one.
+ * Every font-size in the stylesheet is in rem and the root is a PERCENTAGE,
+ * so "A" means 100% - whatever the citizen has already chosen in their
+ * browser or operating system - rather than a size of ours that overrides
+ * theirs. A- and A+ step either side of that. Remembered per browser, since
+ * someone who needs larger text needs it on every visit.
  */
 function wireTextSize() {
   let saved = 'md';
@@ -602,6 +604,8 @@ function wireTextSize() {
     b.onclick = () => {
       apply(b.dataset.size);
       try { localStorage.setItem('mha_textsize', b.dataset.size); } catch { /* ignore */ }
+      const said = { sm: 'Smaller text', md: "Using your browser's text size", lg: 'Larger text' };
+      toast(said[b.dataset.size] || 'Text size changed');
     };
   });
 }
