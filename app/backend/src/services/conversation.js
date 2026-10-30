@@ -25,10 +25,20 @@ import { languagesForPincode, stateForPincode, isValidPincode } from '../data/st
 import { t } from '../data/phrases.js';
 
 /**
- * How sure the local detector must be before it moves the conversation to a
- * different language. Short, language-neutral answers score far below this.
+ * What it takes to move a conversation into a different language.
+ *
+ * Confidence alone is not enough, and the case that proves it is a form
+ * answer: "UTR123456789012" is 100% Latin by character share, so a
+ * share-based score calls it English and the bot abandons the Punjabi the
+ * citizen was speaking - mid-complaint, over a reference number they were
+ * asked to type. Three letters is not a language sample.
+ *
+ * So a switch needs BOTH a confident reading and enough letters to have read.
+ * Labelling a message is a weaker claim than redirecting a conversation, and
+ * only the latter is gated this hard.
  */
 const LANGUAGE_SWITCH_CONFIDENCE = 0.5;
+const LANGUAGE_SWITCH_MIN_LETTERS = 8;
 
 export const STEPS = [
   'narrative',
@@ -275,8 +285,18 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
   } else {
     const detected = detectLanguage(value, { hint: previousLanguage });
     identification = detected;
-    // Only a confident reading may move the conversation.
-    if (detected.confidence >= LANGUAGE_SWITCH_CONFIDENCE) language = detected.code;
+    const sureEnough = detected.confidence >= LANGUAGE_SWITCH_CONFIDENCE;
+    const enoughToRead = (detected.letters || 0) >= LANGUAGE_SWITCH_MIN_LETTERS;
+    if (sureEnough && enoughToRead) {
+      language = detected.code;
+    } else if (detected.code !== previousLanguage) {
+      // Say why it was ignored, so a reviewer is not left wondering whether
+      // detection simply failed.
+      identification = {
+        ...detected,
+        heldBack: enoughToRead ? 'confidence below threshold' : `only ${detected.letters || 0} letters`,
+      };
+    }
   }
 
   if (identification) {

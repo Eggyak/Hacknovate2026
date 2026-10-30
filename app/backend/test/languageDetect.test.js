@@ -83,3 +83,18 @@ test('honours a stated language when the script is ambiguous and silent', () => 
   assert.equal(got.code, 'mr');
   assert.equal(got.method, 'script-plus-stated-language');
 });
+
+test('short, language-neutral input reports little evidence', () => {
+  /*
+   * These are form answers, not language samples. They must not look
+   * confident enough to redirect a conversation someone is mid-way through.
+   */
+  for (const neutral of ['UTR123456789012', 'Male', 'SBIN0001234', '50000', '110001']) {
+    const got = detectLanguage(neutral);
+    assert.ok((got.letters || 0) < 8, `${neutral} reported ${got.letters} letters`);
+  }
+
+  // A real sentence, by contrast, has plenty.
+  const real = detectLanguage('Money was fraudulently taken from my bank account');
+  assert.ok(real.letters >= 8 && real.confidence >= 0.9, JSON.stringify(real));
+});

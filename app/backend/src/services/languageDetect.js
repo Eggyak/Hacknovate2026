@@ -115,6 +115,7 @@ export function detectLanguage(text, { hint = null } = {}) {
       locale: (byCode(hint) || byCode('en')).locale,
       confidence: 0,
       script: null,
+      letters: 0,
       method: 'empty-input',
       evidence: [],
       alternatives: [],
@@ -130,6 +131,7 @@ export function detectLanguage(text, { hint = null } = {}) {
       locale: (byCode(hint) || byCode('en')).locale,
       confidence: 0,
       script: null,
+      letters: 0,
       method: 'no-letters',
       evidence: [],
       alternatives: [],
@@ -140,6 +142,17 @@ export function detectLanguage(text, { hint = null } = {}) {
   const [topScript, topCount] = ranked[0];
   const scriptShare = topCount / total;
 
+  /*
+   * How much there was to go on.
+   *
+   * Share alone is a liar on short input: "UTR123456789012" is 100% Latin by
+   * share and tells you nothing about what language anyone speaks. Confidence
+   * has to fall away as the sample shrinks, and `letters` is published so a
+   * caller deciding whether to SWITCH a conversation can demand more than a
+   * caller merely labelling one.
+   */
+  const evidence = Math.min(total, 24) / 24;
+
   // A script that owns itself needs no further argument.
   if (UNAMBIGUOUS[topScript]) {
     const code = UNAMBIGUOUS[topScript];
@@ -147,10 +160,14 @@ export function detectLanguage(text, { hint = null } = {}) {
     return {
       code,
       locale: lang.locale,
-      confidence: round(Math.min(0.99, 0.6 + scriptShare * 0.39)),
+      confidence: round(Math.min(0.99, 0.25 + scriptShare * 0.3 + evidence * 0.44)),
       script: topScript,
+      letters: total,
       method: 'script-exclusive',
-      evidence: [`${topCount}/${total} characters in ${topScript}`],
+      evidence: [
+        `${topCount}/${total} characters in ${topScript}`,
+        total < 8 ? `only ${total} letters to judge from` : `${total} letters of evidence`,
+      ],
       alternatives: ranked.slice(1, 3).map(([s, n]) => ({ script: s, chars: n })),
     };
   }
@@ -163,16 +180,17 @@ export function detectLanguage(text, { hint = null } = {}) {
         locale: byCode('as').locale,
         confidence: round(Math.min(0.97, 0.82 + hits * 0.03)),
         script: 'Bengali',
+        letters: total,
         method: 'assamese-exclusive-letter',
         evidence: [`${hits} occurrence(s) of Assamese-only letters U+09F0/U+09F1`],
         alternatives: [{ code: 'bn', reason: 'same script' }],
       };
     }
-    return resolveByMarkers(trimmed, ['bn', 'as'], 'Bengali', scriptShare, hint, 'bn');
+    return resolveByMarkers(trimmed, ['bn', 'as'], 'Bengali', scriptShare, hint, 'bn', total);
   }
 
   if (topScript === 'Devanagari') {
-    return resolveByMarkers(trimmed, ['hi', 'mr', 'ne'], 'Devanagari', scriptShare, hint, 'hi');
+    return resolveByMarkers(trimmed, ['hi', 'mr', 'ne'], 'Devanagari', scriptShare, hint, 'hi', total);
   }
 
   // Should be unreachable, but never guess silently.
@@ -188,7 +206,7 @@ export function detectLanguage(text, { hint = null } = {}) {
   };
 }
 
-function resolveByMarkers(text, candidates, script, scriptShare, hint, fallback) {
+function resolveByMarkers(text, candidates, script, scriptShare, hint, fallback, letters = 0) {
   const scores = countMarkers(text, candidates);
   const ordered = candidates
     .map((code) => ({ code, ...scores[code] }))
@@ -207,6 +225,7 @@ function resolveByMarkers(text, candidates, script, scriptShare, hint, fallback)
       locale: lang.locale,
       confidence: 0.25,
       script,
+      letters,
       method: candidates.includes(hint) ? 'script-plus-stated-language' : 'script-plus-default',
       evidence: [`${script} script, but no distinguishing markers found`],
       alternatives: candidates.filter((c) => c !== code).map((c) => ({ code: c })),
@@ -224,6 +243,7 @@ function resolveByMarkers(text, candidates, script, scriptShare, hint, fallback)
     locale: lang.locale,
     confidence,
     script,
+    letters,
     method: 'script-plus-markers',
     evidence: [
       `${script} script`,
