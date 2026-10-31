@@ -5,6 +5,7 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "mha-status-callback",
+        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
@@ -12,39 +13,20 @@
       "name": "Callback requested",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-380, 0],
+      "position": [
+        -260,
+        0
+      ],
       "webhookId": "mha-status-callback",
-      "notes": "Called by the citizen portal when somebody asks to be rung. Body: { token, to, language, twimlUrl }."
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": { "caseSensitive": true, "version": 2 },
-          "conditions": [
-            {
-              "leftValue": "={{ $json.headers['x-callback-secret'] }}",
-              "rightValue": "={{ $env.CALLBACK_SHARED_SECRET }}",
-              "operator": { "type": "string", "operation": "equals" }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "id": "verify",
-      "name": "Shared secret matches",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [-160, 0],
-      "notes": "This workflow can place telephone calls. Anything that can reach the webhook URL must still prove it is the portal."
+      "notes": "Header Auth, not an IF node comparing against $env. This n8n runs with N8N_RUNNERS_ENABLED=true, which blocks $env inside expressions - a gate built on it fails silently rather than refusing. Header Auth is enforced by n8n before any node runs, so an unauthenticated request never reaches the dialler."
     },
     {
       "parameters": {
         "resource": "call",
-        "from": "={{ $env.MHA_TWILIO_FROM }}",
+        "from": "={{ $json.body.from }}",
         "to": "={{ $json.body.to }}",
         "options": {
-          "statusCallback": "={{ $env.MHA_PUBLIC_URL }}/api/calls/status"
+          "statusCallback": "={{ $json.body.statusUrl }}"
         },
         "twiml": true,
         "message": "={{ '<Response><Redirect>' + $json.body.twimlUrl + '</Redirect></Response>' }}"
@@ -53,14 +35,11 @@
       "name": "Place the call",
       "type": "n8n-nodes-base.twilio",
       "typeVersion": 1,
-      "position": [80, -90],
-      "credentials": {
-        "twilioApi": {
-          "id": "REPLACE_WITH_YOUR_TWILIO_CREDENTIAL_ID",
-          "name": "MHA Samadhan Twilio"
-        }
-      },
-      "notes": "A Redirect rather than inline TwiML: the portal decides what is said, in the citizen's chosen language, at the moment the call connects. Nothing about the grievance passes through this workflow."
+      "position": [
+        -20,
+        0
+      ],
+      "notes": "Every value comes from the request body, because $env is unavailable here. A Redirect rather than inline TwiML: the portal decides what is said, in the citizen's chosen language, at the moment the call connects - so nothing about anybody's grievance passes through this workflow."
     },
     {
       "parameters": {
@@ -71,33 +50,39 @@
       "id": "ok",
       "name": "Report the SID",
       "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [320, -90]
-    },
-    {
-      "parameters": {
-        "respondWith": "json",
-        "responseCode": 401,
-        "responseBody": "={{ JSON.stringify({ ok: false, error: 'unauthorised' }) }}",
-        "options": {}
-      },
-      "id": "deny",
-      "name": "Refuse",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [80, 110]
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        0
+      ]
     }
   ],
   "connections": {
-    "Callback requested": { "main": [[{ "node": "Shared secret matches", "type": "main", "index": 0 }]] },
-    "Shared secret matches": {
+    "Callback requested": {
       "main": [
-        [{ "node": "Place the call", "type": "main", "index": 0 }],
-        [{ "node": "Refuse", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Place the call",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Place the call": { "main": [[{ "node": "Report the SID", "type": "main", "index": 0 }]] }
+    "Place the call": {
+      "main": [
+        [
+          {
+            "node": "Report the SID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" },
+  "settings": {
+    "executionOrder": "v1"
+  },
   "pinData": {}
 }

@@ -83,15 +83,26 @@ callsRouter.post('/request', requireCitizen, requestLimiter, async (req, res, ne
      */
     const sent = await dispatch({ ...result.call, mobile: req.citizen.mobile });
 
-    return res.status(201).json({
-      ok: true,
+    /*
+     * Say which of the two happened.
+     *
+     * "Queued, the call will be placed as soon as the line is free" reads
+     * as a promise, and it is only true when something is going to pick
+     * the job up. If the dialler refused - no credential attached yet, no
+     * Twilio account reachable - then nobody is coming, and telling
+     * somebody their phone is about to ring when it is not is worse than
+     * telling them it did not work.
+     */
+    return res.status(sent.ok ? 201 : 503).json({
+      ok: sent.ok,
       queued: true,
       placed: sent.ok,
       language: result.language.native || result.language.name,
       reference: result.call.reference,
       message: sent.ok
         ? 'Your phone will ring shortly.'
-        : 'Your request is queued. The call will be placed as soon as the line is free.',
+        : 'The telephone line is not answering right now, so no call was placed. '
+          + 'Your request is on record and nothing else about your grievance is affected.',
     });
   } catch (err) {
     next(err);

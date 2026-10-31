@@ -34,7 +34,9 @@ import { synthesize } from './azureSpeech.js';
 const HOURLY_LIMIT = 3;
 
 export function configured() {
-  return Boolean(env.callbacks?.webhookUrl);
+  // A dialler to hand the job to AND a number to dial from. Either one
+  // missing means the button would queue a call nobody can place.
+  return Boolean(env.callbacks?.webhookUrl && env.callbacks?.from);
 }
 
 /**
@@ -213,12 +215,23 @@ export async function dispatch(call) {
         'Content-Type': 'application/json',
         ...(env.callbacks.secret ? { 'x-callback-secret': env.callbacks.secret } : {}),
       },
+      /*
+       * Everything the workflow needs, in the request.
+       *
+       * It cannot read its own configuration: this n8n runs with task
+       * runners enabled and $env is blocked inside expressions, so a
+       * workflow that reaches for one silently produces nothing. Sending
+       * the lot also keeps the workflow pure plumbing - the only thing
+       * anybody configures over there is which Twilio account to use.
+       */
       body: JSON.stringify({
         token: call.token,
         to: `+91${call.mobile}`,
+        from: env.callbacks.from,
         language: call.language,
         // Where the dialler should fetch the spoken words from.
         twimlUrl: `${env.publicUrl}/api/calls/twiml/${call.token}`,
+        statusUrl: `${env.publicUrl}/api/calls/status`,
       }),
       signal: AbortSignal.timeout(15_000),
     });

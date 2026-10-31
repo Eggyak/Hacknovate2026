@@ -77,35 +77,56 @@ route, so one machine cannot queue calls across many accounts.
 
 Nothing below is set by this repository and none of it is in git.
 
-**1. A Twilio number.** Use whichever account you like, but note that the
-Saarthi 2.0 project's credentials are not read or reused here, and its
-number should not be repointed — an incoming webhook changed on a shared
-number is exactly how you break the other project's pipeline. Provision a
-separate number, or use the same account with a *different* number and a
-*separate* n8n credential.
+### Why the workflow carries no configuration
+
+This n8n runs with `N8N_RUNNERS_ENABLED=true`. With task runners on, n8n
+blocks `$env` inside expressions — a node that reaches for one does not
+error loudly, it just produces nothing, and a *gate* built that way stops
+gating. The first version of this workflow had exactly that bug: an IF node
+comparing a header against `$env.CALLBACK_SHARED_SECRET`, which on this
+instance silently did neither.
+
+So the workflow reads nothing from its environment. Every value — the
+number to dial, the number to dial from, the TwiML URL, the status URL —
+arrives in the request body from the portal, and the gate is n8n's own
+**Header Auth**, which is enforced before any node runs.
+
+That leaves exactly two things to configure in n8n, both credentials.
+
+### 1. A Twilio number
+
+Use whichever account you like, but the Saarthi 2.0 project's credentials
+are not read or reused here, and its number should not be repointed — an
+incoming webhook changed on a shared number is how you break that pipeline.
+Provision a separate number, or use the same account with a *different*
+number and a *separate* n8n credential.
 
 On a Twilio trial, outbound calls only connect to **verified** numbers. Add
-the test phone under Verified Caller IDs first, or the call fails with
-`21219` and the citizen just never hears a ring.
+the test phone under Verified Caller IDs first, or the call fails `21219`
+and the citizen simply never hears a ring.
 
-**2. In n8n**, import `ops/n8n/mha-status-callback.json`, attach a Twilio
-credential, and set on the n8n instance:
+### 2. In n8n
 
-| | |
-|---|---|
-| `MHA_TWILIO_FROM` | the number calls are placed from, E.164 |
-| `MHA_PUBLIC_URL` | `https://hacknovate2026.visioncoders.in` |
-| `CALLBACK_SHARED_SECRET` | any long random string |
+Import `ops/n8n/mha-status-callback.json`, then open the workflow and
+attach two credentials:
 
-Activate the workflow. `import:workflow` leaves a workflow **deactivated**,
-so if you import from the CLI follow it with
-`n8n update:workflow --id=<id> --active=true` and restart.
+| Node | Credential | Value |
+|---|---|---|
+| Callback requested | **Header Auth** | name `x-callback-secret`, value = your secret |
+| Place the call | **Twilio API** | the account the number belongs to |
 
-**3. In `/opt/stacks/mha-samadhan/.env`** (mode 600, never in git):
+Activate it. `import:workflow` leaves a workflow **deactivated**, so from
+the CLI follow it with `n8n update:workflow --id=<id> --active=true` and
+restart n8n.
+
+### 3. In `/opt/stacks/mha-samadhan/.env`
+
+Mode 600, never in git:
 
 ```
 N8N_CALLBACK_WEBHOOK_URL=http://n8n-kmar-n8n-1:5678/webhook/mha-status-callback
-CALLBACK_SHARED_SECRET=<the same string>
+CALLBACK_SHARED_SECRET=<the same secret as the Header Auth credential>
+TWILIO_FROM_NUMBER=+1XXXXXXXXXX
 ```
 
 The container name rather than the public hostname: `mha-api` is already on

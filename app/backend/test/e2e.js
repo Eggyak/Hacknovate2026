@@ -939,7 +939,18 @@ async function runCoreFeatures() {
 
   const asked = await apiA('/calls/request', { method: 'POST', body: { language: 'ta' } });
   if (options.available) {
-    check('a callback can be requested', asked.status === 201, `HTTP ${asked.status}`);
+    /*
+     * 201 when the dialler took it, 503 when it refused. Both are correct
+     * answers; what would be wrong is 201 with nobody coming, which is
+     * what "queued, the call will be placed shortly" used to say whatever
+     * happened.
+     */
+    check('a callback is either placed or honestly refused',
+      [201, 503].includes(asked.status) && Boolean(asked.data?.message),
+      `HTTP ${asked.status}: ${asked.data?.message || ''}`.slice(0, 90));
+    check('a refusal never claims the phone will ring',
+      asked.status === 201 || !/will ring/i.test(asked.data?.message || ''),
+      asked.data?.message || '');
   } else {
     check('callbacks refuse cleanly when not configured',
       asked.status === 503 && Boolean(asked.data?.message), `HTTP ${asked.status}`);

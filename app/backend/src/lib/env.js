@@ -101,6 +101,16 @@ export const env = {
   callbacks: {
     webhookUrl: str('N8N_CALLBACK_WEBHOOK_URL'),
     secret: str('CALLBACK_SHARED_SECRET'),
+    /*
+     * The number calls are placed from.
+     *
+     * Held here rather than in the workflow because this n8n runs with
+     * task runners enabled, which blocks $env inside expressions - so the
+     * workflow cannot read its own configuration and everything it needs
+     * has to arrive in the request. A phone number is not a secret, and
+     * configuration already lives in this file.
+     */
+    from: str('TWILIO_FROM_NUMBER'),
   },
 };
 
@@ -115,7 +125,7 @@ export function capabilities() {
     departmentSync: Boolean(env.govt.baseUrl && env.govt.serviceKey),
     // A spoken callback needs a dialler to hand the job to AND a voice to
     // read it with; either one missing means the button should not appear.
-    spokenCallback: Boolean(env.callbacks.webhookUrl && env.azureSpeech.key),
+    spokenCallback: Boolean(env.callbacks.webhookUrl && env.callbacks.from && env.azureSpeech.key),
   };
 }
 
