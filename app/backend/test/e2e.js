@@ -792,8 +792,21 @@ async function runCoreFeatures() {
   check('priority was scored', rowA.priority_score >= 1 && rowA.priority_score <= 4,
     `score ${rowA.priority_score}`);
 
-  const cluster = (await query('SELECT member_count FROM grievance_clusters WHERE id=$1', [rowA.cluster_id])).rows[0];
-  check('the cluster counts both', cluster.member_count === 2, String(cluster.member_count));
+  /*
+   * Count the cluster's live members rather than reading member_count.
+   *
+   * This assertion used to read the stored counter and failed on the third
+   * run with "6": each run files two reports into the same cluster -
+   * signature is division plus pincode, which the run reuses - and then
+   * deletes its own citizens, and nothing decrements the counter. The test
+   * was right to fail. The counter was the bug, and the fix is in
+   * services/civic.js; this now checks the thing it meant to check.
+   */
+  const cluster = (await query(
+    'SELECT COUNT(*)::int AS members FROM grievances WHERE cluster_id = $1',
+    [rowA.cluster_id],
+  )).rows[0];
+  check('the cluster counts both', cluster.members === 2, String(cluster.members));
 
   // B adds weight to A's report rather than filing a third.
   const similar = await apiB('/civic/similar', {

@@ -349,7 +349,13 @@ export async function getForCitizen(citizenId, reference) {
     query('SELECT id, author_kind, author_name, body, created_at FROM grievance_comments WHERE grievance_id = $1 ORDER BY created_at', [grievance.id]),
     query('SELECT COUNT(*)::int AS n FROM grievance_supports WHERE grievance_id = $1', [grievance.id]),
     grievance.cluster_id
-      ? query('SELECT id, title, member_count, pincode FROM grievance_clusters WHERE id = $1', [grievance.cluster_id])
+      ? query(
+        // Counted, not read off member_count, which only ever increments.
+        `SELECT c.id, c.title, c.pincode,
+                (SELECT COUNT(*)::int FROM grievances m WHERE m.cluster_id = c.id) AS member_count
+           FROM grievance_clusters c WHERE c.id = $1`,
+        [grievance.cluster_id],
+      )
       : Promise.resolve({ rows: [] }),
   ]);
 

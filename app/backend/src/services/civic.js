@@ -53,6 +53,12 @@ export async function assignCluster(client, grievance, classification) {
      RETURNING id, member_count, (xmax = 0) AS inserted`,
     [grievance.division_id, grievance.pincode, signature, title],
   );
+  /*
+   * `member_count` here is a running tally for ordering and nothing more.
+   * It is never decremented when a grievance is deleted, so it is an upper
+   * bound rather than a fact, and anything shown to anybody counts the
+   * rows instead - see hotspots() and findSimilar().
+   */
 
   const row = upserted.rows[0];
   await client.query('UPDATE grievances SET cluster_id = $2 WHERE id = $1', [grievance.id, row.id]);
@@ -74,7 +80,8 @@ export async function findSimilar({ divisionId, pincode, classification, exclude
 
   const r = await query(
     `SELECT g.reference_id, g.subject, g.status, g.submitted_at, g.priority_score,
-            c.member_count,
+            -- Live, for the same reason as hotspots: member_count drifts.
+            (SELECT COUNT(*)::int FROM grievances m WHERE m.cluster_id = c.id) AS member_count,
             (SELECT COUNT(*)::int FROM grievance_supports s WHERE s.grievance_id = g.id) AS supporters
        FROM grievances g
        JOIN grievance_clusters c ON c.id = g.cluster_id
@@ -330,15 +337,31 @@ export async function publicMap({ pincode, division, status, limit = 200 }) {
   }));
 }
 
-/** Hotspots: where the same kind of problem keeps being reported. */
+/**
+ * Hotspots: where the same kind of problem keeps being reported.
+ *
+ * Counted from the grievances themselves, not from `member_count`.
+ *
+ * That column only ever goes up - assignCluster increments it on conflict
+ * and nothing decrements it - so when a grievance is deleted the cluster
+ * keeps claiming a member it no longer has. Three rounds of end-to-end
+ * tests, each filing two reports and then deleting its own citizens, left a
+ * cluster insisting it held six. Every one of those would have been
+ * published here as a report by a real person.
+ *
+ * A counter that can drift has no business being the number a public page
+ * shows. Counting the rows costs one join and cannot be wrong.
+ */
 export async function hotspots({ limit = 50 } = {}) {
   const r = await query(
-    `SELECT c.id, c.division_id, c.pincode, c.title, c.member_count, c.last_seen,
-            (SELECT COUNT(*)::int FROM grievances g
-              WHERE g.cluster_id = c.id AND g.status IN ('resolved','closed')) AS resolved
+    `SELECT c.id, c.division_id, c.pincode, c.title, c.last_seen,
+            COUNT(g.id)::int AS reports,
+            COUNT(g.id) FILTER (WHERE g.status IN ('resolved','closed'))::int AS resolved
        FROM grievance_clusters c
-      WHERE c.member_count > 1
-      ORDER BY c.member_count DESC, c.last_seen DESC
+       JOIN grievances g ON g.cluster_id = c.id
+      GROUP BY c.id, c.division_id, c.pincode, c.title, c.last_seen
+     HAVING COUNT(g.id) > 1
+      ORDER BY COUNT(g.id) DESC, c.last_seen DESC
       LIMIT $1`,
     [Math.min(Number(limit) || 50, 200)],
   );
@@ -349,7 +372,7 @@ export async function hotspots({ limit = 50 } = {}) {
     divisionId: row.division_id,
     pincode: row.pincode,
     title: row.title,
-    reports: row.member_count,
+    reports: row.reports,
     resolved: row.resolved,
     lastReported: row.last_seen,
   }));
