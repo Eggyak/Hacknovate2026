@@ -122,6 +122,53 @@ test('civic.js does not reach into the app', () => {
   assert.ok(!/\bstate\./.test(civic), "civic.js is touching the app's state directly");
 });
 
+test('every colour the scripts ask for actually exists', () => {
+  /*
+   * civic.js painted the good transparency scores with var(--good), and
+   * nothing anywhere defines --good. The palette calls it --success. An
+   * undefined custom property does not fail, or warn, or fall back to
+   * anything sensible - it simply inherits, so the number rendered in
+   * whatever colour the surrounding text happened to be and looked like a
+   * design choice.
+   *
+   * Nothing catches that by reading, and there is no browser here to catch
+   * it by looking, so it is checked here.
+   */
+  const defined = new Set(
+    [...css.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gim)].map((m) => m[1]),
+  );
+
+  const undefinedRefs = new Set();
+  for (const source of [app, civic]) {
+    for (const match of source.matchAll(/var\((--[a-z0-9-]+)/gi)) {
+      if (!defined.has(match[1])) undefinedRefs.add(match[1]);
+    }
+  }
+
+  assert.deepEqual(
+    [...undefinedRefs],
+    [],
+    `these custom properties are used but never defined: ${[...undefinedRefs].join(', ')}`,
+  );
+  assert.ok(defined.size > 10, `only found ${defined.size} custom properties; the regex is wrong`);
+});
+
+test('a deploy cannot leave a browser running the old script', () => {
+  /*
+   * The static handler exempted only .html from the one-hour cache, so new
+   * HTML was served alongside the previous app.js for an hour after every
+   * deploy. That was survivable while app.js was self-contained. It stopped
+   * being survivable when app.js started importing civic.js: a cached copy
+   * has no such import, so the new panels were absent rather than broken,
+   * which is much harder to notice.
+   */
+  const server = readFileSync(join(HERE, '..', 'src', 'server.js'), 'utf8');
+  assert.ok(
+    /\(html\|js\|css\)\$/.test(server),
+    'scripts and stylesheets are cacheable again; a deploy will serve stale JS',
+  );
+});
+
 test('the new controls scale with the text-size setting', () => {
   /*
    * The text-size control works by scaling the root font size, so anything

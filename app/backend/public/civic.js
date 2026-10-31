@@ -285,7 +285,7 @@ export async function viewNearby(ctx) {
   const divisions = board.divisions || [];
 
   const scoreColour = (score) => {
-    if (score >= 75) return 'var(--good)';
+    if (score >= 75) return 'var(--success)';
     if (score >= 50) return 'var(--accent)';
     return 'var(--danger)';
   };

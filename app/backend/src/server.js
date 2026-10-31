@@ -97,8 +97,21 @@ app.use(
   express.static(FRONTEND, {
     maxAge: '1h',
     setHeaders: (res, path) => {
-      // The shell must never be cached, or a deploy leaves stale JS behind.
-      if (path.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+      /*
+       * The shell must never be cached, or a deploy leaves stale JS behind.
+       *
+       * Except that exempting only the HTML did not achieve that. The shell
+       * revalidated and the scripts did not, so for an hour after a deploy a
+       * returning browser paired new HTML with the old app.js - and when
+       * app.js grew an import of civic.js, that cached copy did not import
+       * it at all, so the new panels simply were not there. This project has
+       * already lost an afternoon to new HTML calling day-old JavaScript.
+       *
+       * These files are small and ETags are on, so revalidating costs a 304
+       * and buys correctness. Images and fonts keep the hour: they are
+       * bigger, and they change under a new name when they change at all.
+       */
+      if (/\.(html|js|css)$/.test(path)) res.setHeader('Cache-Control', 'no-cache');
     },
   }),
 );
