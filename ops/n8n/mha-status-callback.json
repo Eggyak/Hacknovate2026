@@ -5,7 +5,6 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "mha-status-callback",
-        "authentication": "headerAuth",
         "responseMode": "responseNode",
         "options": {}
       },
@@ -14,32 +13,55 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        -260,
+        -420,
         0
       ],
       "webhookId": "mha-status-callback",
-      "notes": "Header Auth, not an IF node comparing against $env. This n8n runs with N8N_RUNNERS_ENABLED=true, which blocks $env inside expressions - a gate built on it fails silently rather than refusing. Header Auth is enforced by n8n before any node runs, so an unauthenticated request never reaches the dialler."
+      "notes": "Takes a token and nothing else. Any phone number in the body is ignored - see the next node."
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://hacknovate2026.visioncoders.in/api/calls/dispatch/' + $json.body.token }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "resolve",
+      "name": "Ask the portal what to dial",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -180,
+        0
+      ],
+      "notes": "This is the anti-abuse design. A dialler that accepts a phone number from whoever reaches its webhook is toll fraud waiting to happen, and no shared secret fixes that as cleanly as not accepting the number. Whoever calls this webhook can only ask for a call the portal already queued, to the number the portal already chose. A forged token 404s here and the workflow stops.\n\nThe portal URL is fixed in this node rather than taken from the request, because a resolver address supplied by the caller is no protection at all."
     },
     {
       "parameters": {
         "resource": "call",
-        "from": "={{ $json.body.from }}",
-        "to": "={{ $json.body.to }}",
+        "from": "={{ $json.from }}",
+        "to": "={{ $json.to }}",
         "options": {
-          "statusCallback": "={{ $json.body.statusUrl }}"
+          "statusCallback": "={{ $json.statusUrl }}"
         },
         "twiml": true,
-        "message": "={{ '<Response><Redirect>' + $json.body.twimlUrl + '</Redirect></Response>' }}"
+        "message": "={{ '<Response><Redirect>' + $json.twimlUrl + '</Redirect></Response>' }}"
       },
       "id": "dial",
       "name": "Place the call",
       "type": "n8n-nodes-base.twilio",
       "typeVersion": 1,
       "position": [
-        -20,
+        60,
         0
       ],
-      "notes": "Every value comes from the request body, because $env is unavailable here. A Redirect rather than inline TwiML: the portal decides what is said, in the citizen's chosen language, at the moment the call connects - so nothing about anybody's grievance passes through this workflow."
+      "credentials": {
+        "twilioApi": {
+          "id": "jX9mHOCEiA0ugAqo",
+          "name": "Twilio account"
+        }
+      },
+      "notes": "A Redirect rather than inline TwiML: the portal decides what is said, in the citizen's chosen language, at the moment the call connects - so nothing about anybody's grievance passes through this workflow.\n\nNo $env anywhere: this n8n runs with task runners enabled, which blocks $env inside expressions, and a node that reaches for one produces nothing rather than failing."
     },
     {
       "parameters": {
@@ -52,13 +74,24 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        220,
+        300,
         0
       ]
     }
   ],
   "connections": {
     "Callback requested": {
+      "main": [
+        [
+          {
+            "node": "Ask the portal what to dial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask the portal what to dial": {
       "main": [
         [
           {

@@ -157,6 +157,45 @@ callsRouter.all('/twiml/:token', async (req, res, next) => {
 });
 
 /**
+ * What to dial, resolved from a token.
+ *
+ * The workflow is handed a token and nothing else, and asks here what to
+ * do with it. That is the whole anti-abuse design: a dialler that accepts
+ * a phone number from whoever calls its webhook is toll fraud waiting to
+ * happen, and no amount of shared secrets fixes it as cleanly as simply
+ * not accepting the number.
+ *
+ * So an attacker who reaches the webhook can only ask for a call that
+ * this portal already queued, to the number this portal already chose,
+ * for a citizen who already asked for it. A forged token resolves to
+ * nothing.
+ *
+ * The token is the authorisation: 24 random bytes, single purpose,
+ * expiring within the hour, and only ever sent to the dialler.
+ */
+callsRouter.get('/dispatch/:token', async (req, res, next) => {
+  try {
+    const call = await callByToken(req.params.token);
+    if (!call) return res.status(404).json({ error: 'not_found' });
+
+    if (!env.callbacks?.from) {
+      return res.status(503).json({ error: 'no_caller_id' });
+    }
+
+    await markCall(call.token, 'placed');
+
+    return res.json({
+      to: `+91${call.mobile}`,
+      from: env.callbacks.from,
+      twimlUrl: `${env.publicUrl}/api/calls/twiml/${call.token}`,
+      statusUrl: `${env.publicUrl}/api/calls/status`,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * The spoken words themselves.
  *
  * Public by necessity and safe by construction: the token is unguessable

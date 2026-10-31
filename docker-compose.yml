@@ -51,6 +51,13 @@ services:
       # back in for no reason.
       GOVT_API_URL: ${GOVT_API_URL:-http://mha-govt:8130}
       MHA_INTAKE_SERVICE_KEY: ${MHA_INTAKE_SERVICE_KEY:-}
+
+      # Spoken status callbacks. Absent means the feature reports itself
+      # off rather than putting a button on the dashboard that queues
+      # calls nobody can place.
+      N8N_CALLBACK_WEBHOOK_URL: ${N8N_CALLBACK_WEBHOOK_URL:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+      CALLBACK_SHARED_SECRET: ${CALLBACK_SHARED_SECRET:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       MISTRAL_MODEL: ${MISTRAL_MODEL:-ministral-14b-latest}
       N8N_OTP_WEBHOOK_URL: ${N8N_OTP_WEBHOOK_URL:-}
