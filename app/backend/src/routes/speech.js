@@ -62,7 +62,26 @@ speechRouter.get('/token', requireCitizen, async (req, res, next) => {
      * Odia rather than having it guessed.
      */
     const chosen = req.query.language || req.citizen.preferred_language;
-    const forceLocale = speechLocaleFor(chosen);
+
+    /*
+     * Two ways to use the microphone, and the citizen picks.
+     *
+     *   auto   Azure identifies the language from the audio, across the
+     *          candidate list. Right when somebody does not want to think
+     *          about it, or switches language mid-sentence.
+     *
+     *   fixed  recognition is pinned to one language and cannot drift.
+     *          Right when somebody knows what they are about to speak and
+     *          is tired of being mis-heard - identification across ten
+     *          candidates is a guess, and a confident wrong guess reroutes
+     *          the whole conversation.
+     *
+     * `fixed` is honoured for any language, not only the two Azure cannot
+     * identify. Those two are still pinned whatever the mode, because for
+     * them there is no choice to offer.
+     */
+    const pinned = req.query.mode === 'fixed' && byCode(chosen);
+    const forceLocale = pinned ? byCode(chosen).locale : speechLocaleFor(chosen);
 
     return res.json({
       token,
@@ -71,9 +90,12 @@ speechRouter.get('/token', requireCitizen, async (req, res, next) => {
       forceLocale,
       supported: LANGUAGES.length,
       identifiable: LANGUAGES.filter(lidSupported).length,
-      note: forceLocale
-        ? `${byCode(chosen).name} is transcribed directly; Azure cannot identify it automatically.`
-        : `Azure evaluates up to ${candidates.length} candidate locales per utterance; ${LANGUAGES.length} languages are supported overall.`,
+      mode: forceLocale ? 'fixed' : 'auto',
+      note: pinned
+        ? `Recognition is pinned to ${byCode(chosen).name}; it cannot drift to another language.`
+        : forceLocale
+          ? `${byCode(chosen).name} is transcribed directly; Azure cannot identify it automatically.`
+          : `Azure evaluates up to ${candidates.length} candidate locales per utterance; ${LANGUAGES.length} languages are supported overall.`,
     });
   } catch (err) {
     try {

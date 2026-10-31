@@ -154,13 +154,27 @@ export async function callByToken(token) {
 }
 
 export async function markCall(token, status, { sid = null, failure = null } = {}) {
+  /*
+   * `$2::text` at BOTH uses, including inside the CASE.
+   *
+   * Postgres deduces one type per parameter across the whole statement.
+   * $2 is assigned to a VARCHAR(16) column and compared to a text literal,
+   * and without the casts it refuses the statement outright:
+   *
+   *   42P08  inconsistent types deduced for parameter $2
+   *   detail: text versus character varying
+   *
+   * This project has been bitten by exactly this before. One cast is not
+   * enough - every use of the parameter needs it, and the one inside a
+   * CASE is the one that gets forgotten.
+   */
   await query(
     `UPDATE call_requests
-        SET status = $2,
-            provider_sid = COALESCE($3, provider_sid),
-            failure = $4,
-            answered_at = CASE WHEN $2 = 'answered' THEN NOW() ELSE answered_at END
-      WHERE token = $1`,
+        SET status = $2::text,
+            provider_sid = COALESCE($3::text, provider_sid),
+            failure = $4::text,
+            answered_at = CASE WHEN $2::text = 'answered' THEN NOW() ELSE answered_at END
+      WHERE token = $1::text`,
     [token, status, sid, failure],
   );
 }

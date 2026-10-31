@@ -1098,3 +1098,31 @@ table.data tr.row:hover { background: var(--surface-2); cursor: pointer; }
   background: var(--surface-2, #f7f8fa);
   border-top: 1px solid var(--line);
 }
+
+/* ---------- "I will speak in" ---------- */
+
+/*
+ * Above the composer, beside the dictation preview. Automatic suits most
+ * people; the explicit choice exists for anyone identification has
+ * mis-heard, and a confident wrong guess reroutes the whole conversation.
+ */
+.speech-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.8rem;
+  border-top: 1px solid var(--line);
+}
+
+.speech-mode label {
+  font-size: 0.75rem;
+  color: var(--ink-2, #5b6672);
+  white-space: nowrap;
+}
+
+.speech-mode .select {
+  flex: 1;
+  max-width: 14rem;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.5rem;
+}

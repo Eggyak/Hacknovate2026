@@ -87,6 +87,16 @@ const state = {
    * box and this holds the locale that came with them until Send.
    */
   pendingSpoken: null,
+  /*
+   * Which language the microphone should expect.
+   *
+   * 'auto' leaves it to Azure, which identifies across a candidate list.
+   * A language code pins recognition to that language so it cannot drift.
+   * Identification across ten candidates is a guess, and a confident wrong
+   * guess reroutes the whole conversation - so somebody who knows what
+   * they are about to say should be able to say so.
+   */
+  speechMode: 'auto',
 };
 
 /* ---------- small helpers ---------- */
@@ -471,10 +481,17 @@ const speech = {
   async start({ onPartial, onFinal, onError }) {
     if (!window.SpeechSDK) throw new Error('Speech SDK did not load.');
 
-    const lang = state.conversation?.language || state.citizen?.preferred_language || '';
+    const pinned = state.speechMode && state.speechMode !== 'auto';
+    const lang = pinned
+      ? state.speechMode
+      : (state.conversation?.language || state.citizen?.preferred_language || '');
+
     const { token, region, candidates, forceLocale } = await api.get(
       `/speech/token?language=${encodeURIComponent(lang)}`
-      + (state.conversation ? `&conversationId=${state.conversation.conversationId}` : ''),
+      + (pinned ? '&mode=fixed' : '')
+      // The conversation narrows the candidate list, which is only
+      // meaningful when Azure is choosing. Pinned recognition ignores it.
+      + (!pinned && state.conversation ? `&conversationId=${state.conversation.conversationId}` : ''),
     );
     state.lidCandidates = candidates;
 
@@ -1396,6 +1413,10 @@ async function viewChat() {
         <div class="chat">
           <div class="stream" id="stream" data-no-i18n></div>
           <div class="chips" id="chips"></div>
+          <div class="speech-mode">
+            <label for="speechMode">I will speak in</label>
+            <select id="speechMode" class="select"></select>
+          </div>
           <div id="spokenPreview" hidden></div>
           <form class="composer" id="composer">
             <textarea id="say" rows="1" placeholder="Type here, or press the microphone"
@@ -1444,6 +1465,7 @@ async function viewChat() {
   renderAffordance(current);
   renderProgress(current);
   renderDetected(current);
+  renderSpeechModes();
 
   $('#composer').onsubmit = async (e) => {
     e.preventDefault();
@@ -2153,6 +2175,32 @@ async function uploadNarrativeAudio(blob) {
  * the language is the part most worth checking - it decides which language
  * the bot answers in for the rest of the interview.
  */
+/**
+ * Fills the "I will speak in" picker.
+ *
+ * Automatic first and selected by default, because it is right for most
+ * people most of the time; the explicit choices are there for anybody it
+ * has got wrong, which is the complaint this came from.
+ */
+function renderSpeechModes() {
+  const host = $('#speechMode');
+  if (!host) return;
+
+  host.innerHTML = [
+    '<option value="auto">Detect automatically</option>',
+    ...state.languages.map((l) =>
+      `<option value="${esc(l.code)}">${esc(l.native || l.name)}</option>`),
+  ].join('');
+
+  host.value = state.speechMode || 'auto';
+  host.onchange = () => {
+    state.speechMode = host.value;
+    // The held dictation was heard under the old setting.
+    state.pendingSpoken = null;
+    renderSpokenPreview(null);
+  };
+}
+
 function renderSpokenPreview(locale) {
   const host = $('#spokenPreview');
   if (!host) return;

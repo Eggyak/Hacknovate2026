@@ -959,6 +959,42 @@ async function runCoreFeatures() {
   const forged = await fetch(`${BASE}/api/calls/dispatch/forged-token-that-does-not-exist`);
   check('a forged token resolves to nothing to dial', forged.status === 404, `HTTP ${forged.status}`);
 
+  /*
+   * The resolver, against a real row, with no telephone involved.
+   *
+   * This is the coverage that went missing when the suite stopped
+   * exercising the dialling path - and the bug walked straight through
+   * the gap. markCall writes `status` into a VARCHAR column and compares
+   * the same parameter to a text literal, which Postgres refuses with
+   * 42P08 unless every use is cast. It only fired once callbacks were
+   * configured, so every run until then was green.
+   *
+   * Inserting the row directly reaches markCall without ringing anyone.
+   */
+  const planted = await query(
+    `INSERT INTO call_requests (citizen_id, token, language, mobile, reference, script_en)
+     VALUES ($1, $2, 'pa', '9000000101', 'MHA-GRV-TEST', 'Test script.')
+     RETURNING token`,
+    [a.citizen.id, `e2e-${Date.now()}`],
+  );
+  const plantedToken = planted.rows[0].token;
+
+  const resolved = await fetch(`${BASE}/api/calls/dispatch/${plantedToken}`);
+  const dial = await resolved.json().catch(() => ({}));
+  check('a real token resolves to dialling instructions',
+    resolved.status === 200 && Boolean(dial.to && dial.twimlUrl),
+    `HTTP ${resolved.status} ${dial.to || ''}`);
+  check('the resolver never takes a number from the caller',
+    dial.to === '+919000000101', String(dial.to));
+
+  const afterResolve = await query('SELECT status FROM call_requests WHERE token = $1', [plantedToken]);
+  check('resolving marks the call placed', afterResolve.rows[0]?.status === 'placed',
+    String(afterResolve.rows[0]?.status));
+
+  const spoken = await fetch(`${BASE}/api/calls/audio/${plantedToken}`);
+  check('the call has audio to play', spoken.ok && Number(spoken.headers.get('content-length') || 1) > 0,
+    `HTTP ${spoken.status} ${spoken.headers.get('content-type') || ''}`);
+
   const badToken = await fetch(`${BASE}/api/calls/audio/not-a-real-token`);
   check('an unknown call token yields no audio', badToken.status === 404, `HTTP ${badToken.status}`);
 
