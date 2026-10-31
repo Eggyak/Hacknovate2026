@@ -19,7 +19,7 @@ import { requireCitizen } from '../lib/auth.js';
 import { query } from '../lib/db.js';
 import {
   support, withdrawSupport, addComment, listComments, rate,
-  publicMap, hotspots, heatmap, transparency, findSimilar, PRIORITY_LABEL,
+  publicMap, hotspots, heatmap, districtHeatmap, transparency, findSimilar, PRIORITY_LABEL,
 } from '../services/civic.js';
 import { classify } from '../services/classifier.js';
 
@@ -61,15 +61,41 @@ civicRouter.get('/hotspots', publicLimiter, async (req, res, next) => {
  */
 civicRouter.get('/heatmap', publicLimiter, async (req, res, next) => {
   try {
+    /*
+     * Two scopes, for two questions.
+     *
+     * A department wants "where in the country", so the default groups by
+     * state. A citizen wants "is it just my street", and a state is far
+     * too coarse to answer that - so with a pincode the same endpoint
+     * groups by district within that state instead.
+     */
+    const pincode = String(req.query.pincode || '').trim();
+    const wantsLocal = req.query.scope === 'district' && /^[1-9][0-9]{5}$/.test(pincode);
+
+    if (wantsLocal) {
+      const local = await districtHeatmap({
+        pincode,
+        divisionId: req.query.divisionId || null,
+        days: req.query.days || null,
+      });
+      return res.json({
+        ...local,
+        note: local.area
+          ? `Districts in ${local.area}, from the complaint pincode. No identities and no complaint text.`
+          : 'That pincode could not be placed.',
+      });
+    }
+
     const data = await heatmap({
       divisionId: req.query.divisionId || null,
       days: req.query.days || null,
     });
-    res.json({
+    return res.json({
       ...data,
+      scope: 'state',
       note: 'Grouped by state from the complaint pincode. No identities and no complaint text.',
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 civicRouter.get('/transparency', publicLimiter, async (_req, res, next) => {

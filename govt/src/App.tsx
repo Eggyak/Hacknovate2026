@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { mountPortalTools } from './portalTools';
+import { StateHeatmap, type StateHeat } from './StateHeatmap';
 import type {
   AccessLevel,
   AnalyticsSummary,
@@ -158,6 +159,7 @@ export default function App() {
    * scopes and the client only has a page of.
    */
   const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
+  const [heatmap, setHeatmap] = useState<StateHeat | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [wardList, setWardList] = useState(initialWards);
@@ -265,6 +267,9 @@ export default function App() {
         api<AnalyticsSummary>('/api/analytics/summary')
           .then(setAnalytics)
           .catch(() => setAnalytics(null));
+        api<StateHeat>('/api/analytics/heatmap')
+          .then(setHeatmap)
+          .catch(() => setHeatmap(null));
       }
       if (data.user.roleId === 'ROLE-SUPER-ADMIN') {
         setActiveView('users');
@@ -445,6 +450,7 @@ export default function App() {
       setNotificationMenuOpen(false);
       setUsers([]);
       setAnalytics(null);
+      setHeatmap(null);
       setRoles(initialRoles);
       setActiveView('dashboard');
     }
@@ -953,6 +959,8 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                <StateHeatmap data={heatmap} />
 
                 {/* Response time + assignment, from the server's own figures */}
                 <div className="panel" style={{ marginTop: '14px' }}>

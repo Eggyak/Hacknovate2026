@@ -336,7 +336,39 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
   let language = previousLanguage;
   let identification = null;
 
-  if (spoken?.locale) {
+  /*
+   * A spoken locale wins only when it was actually IDENTIFIED.
+   *
+   * There are two very different things a client can mean by "this was
+   * spoken in xx-IN":
+   *
+   *   identified  Azure listened across a candidate list and said which
+   *               language it heard. That beats anything we can infer from
+   *               a transcript, because we never hear the audio.
+   *   pinned      the client told its recogniser which language to expect
+   *               and is repeating that back. It is an assumption, not a
+   *               finding, and it is worth nothing as evidence.
+   *
+   * The Android client sent the first LID candidate as though it were the
+   * second kind, and the server took it as the first. A citizen speaking
+   * Punjabi or English had their conversation recorded as Urdu, because
+   * Urdu happened to lead the candidate list. The transcript said
+   * otherwise and was never consulted.
+   *
+   * So a pinned locale no longer overrides anything. The text is analysed
+   * as if it had been typed, and the pin is kept only as a note on how the
+   * audio was captured.
+   */
+  const spokenSource = String(spoken?.source || '').toLowerCase();
+  const identifiedByAzure = Boolean(spoken?.locale) && (
+    spokenSource === 'lid'
+    // Older clients predate `source`. They only ever sent a locale after a
+    // real identification, so an explicit confidence is taken as the mark
+    // of one; a pin carries none.
+    || (!spokenSource && Number(spoken?.confidence || 0) > 0)
+  );
+
+  if (identifiedByAzure) {
     const lang = byCode(String(spoken.locale).split('-')[0]);
     if (lang) {
       language = lang.code;
@@ -351,7 +383,9 @@ export async function handleMessage(conversation, citizen, { text, inputMode = '
     }
   } else {
     const detected = detectLanguage(value, { hint: previousLanguage });
-    identification = detected;
+    identification = spoken?.locale
+      ? { ...detected, dictatedIn: spoken.locale, dictationWasPinned: true }
+      : detected;
     const sureEnough = detected.confidence >= LANGUAGE_SWITCH_CONFIDENCE;
     const enoughToRead = (detected.letters || 0) >= LANGUAGE_SWITCH_MIN_LETTERS;
     if (sureEnough && enoughToRead) {

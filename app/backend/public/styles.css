@@ -968,7 +968,23 @@ table.data tr.row:hover { background: var(--surface-2); cursor: pointer; }
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  /*
+   * Stretch, not start. With `start` the two cards sized themselves
+   * independently and the recent-cases card stopped wherever its content
+   * did, leaving it a stub beside a tall heatmap and a ragged gap below.
+   */
+  align-items: stretch;
+}
+
+/* Both children fill the row, and the list grows into the spare height. */
+.home-split > .card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.home-split > .card > #recentBody {
+  flex: 1;
 }
 
 @media (max-width: 56rem) {
@@ -1015,4 +1031,54 @@ table.data tr.row:hover { background: var(--surface-2); cursor: pointer; }
   font-size: 0.75rem;
   line-height: 1.45;
   color: var(--ink-2, #5b6672);
+}
+
+/* ---------- District heat rows ---------- */
+
+/*
+ * A ranked bar list, not a grid. States have a fixed geography that a
+ * tile layout can echo; districts do not, and 700-odd of them could not
+ * be laid out meaningfully anyway. Ordered by volume, which is the thing
+ * somebody is actually looking for.
+ */
+.heat-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 9rem) 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0;
+}
+
+.heat-row-name {
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.heat-row-bar {
+  display: block;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--surface-2, #eef1f4);
+  overflow: hidden;
+}
+
+.heat-row-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.heat-row-bar .heat-1 { background: #dbeafe; }
+.heat-row-bar .heat-2 { background: #bfdbfe; }
+.heat-row-bar .heat-3 { background: #fcd34d; }
+.heat-row-bar .heat-4 { background: #fb923c; }
+.heat-row-bar .heat-5 { background: #ef4444; }
+
+.heat-row-n {
+  font-size: 0.8rem;
+  font-weight: 700;
+  min-width: 1.6rem;
+  text-align: end;
 }

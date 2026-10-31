@@ -733,6 +733,47 @@ app.get('/api/analytics/summary',requireAuth,requirePermission('analytics:view')
     generatedAt:new Date().toISOString(),
   });
 });
+/**
+ * Complaints by state, for the heatmap.
+ *
+ * Computed from this workspace's own tickets and scoped the same way the
+ * queue is, so a division officer sees their jurisdiction and only a
+ * Super Admin sees the country. Reading the citizen portal's public
+ * heatmap instead would have been easier and wrong - it is national by
+ * definition, and an officer looking at a national figure while believing
+ * it is theirs is worse than no chart.
+ *
+ * The state lives inside payload_json rather than in a column, so it is
+ * pulled out with json_extract. Tickets filed before the location block
+ * existed return null and are grouped under "Unplaced" rather than
+ * silently dropped.
+ */
+app.get('/api/analytics/heatmap',requireAuth,requirePermission('analytics:view'),(req,res)=>{
+  const scope=ticketScope(req);
+  const rows=db.prepare(`SELECT COALESCE(json_extract(payload_json,'$.location.state'),'Unplaced') AS state,
+      COUNT(*) AS total,
+      SUM(CASE WHEN status='RESOLVED' THEN 1 ELSE 0 END) AS resolved,
+      SUM(CASE WHEN sla_status='OVERDUE' AND status<>'RESOLVED' THEN 1 ELSE 0 END) AS overdue
+     FROM tickets${scope.sql}
+     GROUP BY state`).all(...scope.params);
+
+  const states=rows.map(r=>({
+    name:r.state,
+    total:r.total,
+    resolved:r.resolved,
+    overdue:r.overdue,
+    open:r.total-r.resolved,
+  }));
+
+  res.json({
+    scope:'state',
+    states,
+    busiest:states.reduce((most,s)=>Math.max(most,s.total),0),
+    total:states.reduce((sum,s)=>sum+s.total,0),
+    generatedAt:new Date().toISOString(),
+  });
+});
+
 app.get('/api/activity',requireAuth,requirePermission('analytics:view'),(req,res)=>res.json(scopedActivities(req)));
 
 app.use('/api',(req,res)=>res.status(404).json({error:'API endpoint not found.'}));

@@ -20,6 +20,8 @@ import {
   viewNearby,
   heatmapPanel,
   loadHeatmap,
+  districtHeatPanel,
+  loadLocalHeatmap,
 } from './civic.js';
 
 const api = {
@@ -1158,13 +1160,25 @@ const RECENT_COLLAPSED = 4;
 async function viewDashboard() {
   setView('<div class="center" style="padding:60px 0"><span class="spin dark"></span></div>');
 
-  // Three calls in one round trip rather than three in series: the
-  // dashboard should not take three times as long because it grew a panel.
-  const [stats, list, heat] = await Promise.all([
+  // In one round trip rather than in series: the dashboard should not
+  // take three times as long because it grew a panel.
+  const [stats, list] = await Promise.all([
     api.get('/grievances/stats'),
     api.get('/grievances?limit=50'),
-    loadHeatmap(civicCtx()),
   ]);
+
+  /*
+   * The citizen's own area if we know it, the country if we do not.
+   *
+   * Their most recent filing supplies the pincode. Somebody who has filed
+   * nothing yet has no area to show, and the national picture is a
+   * reasonable thing to show them instead of an empty box.
+   */
+  const homePincode = (list.grievances || []).map((g) => g.pincode).find(Boolean) || null;
+  const local = await loadLocalHeatmap(civicCtx(), homePincode);
+  const heat = local && local.districts && local.districts.length
+    ? null
+    : await loadHeatmap(civicCtx());
 
   state.recent = list.grievances;
   state.recentExpanded = false;
@@ -1204,7 +1218,9 @@ async function viewDashboard() {
         <div id="recentBody"></div>
       </div>
 
-      ${heatmapPanel(heat, civicCtx(), { compact: false })}
+      ${local && local.districts && local.districts.length
+        ? districtHeatPanel(local, civicCtx())
+        : heatmapPanel(heat, civicCtx(), { compact: false })}
     </div>
 
     <div class="card">

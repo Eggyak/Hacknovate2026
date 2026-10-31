@@ -880,3 +880,53 @@ html::-webkit-scrollbar,body::-webkit-scrollbar,#root::-webkit-scrollbar{display
     color: #000;
   }
 }
+
+/* ---------- State heatmap ---------- */
+
+.heat-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+}
+
+.heat-svg {
+  width: 100%;
+  max-width: 19rem;
+  height: auto;
+}
+
+.heat-tile rect {
+  fill: var(--paper);
+  stroke: var(--line);
+  stroke-width: 0.5;
+}
+
+.heat-tile .heat-code { font-size: 0.62rem; font-weight: 700; fill: var(--muted); }
+.heat-tile .heat-count { font-size: 0.56rem; font-weight: 700; fill: var(--ink); }
+
+/* A state with nothing filed is drawn, not hidden: absence is information. */
+.heat-tile.heat-0 rect { fill: var(--paper); }
+.heat-tile.heat-1 rect { fill: #dbeafe; stroke: #bfdbfe; }
+.heat-tile.heat-2 rect { fill: #bfdbfe; stroke: #93c5fd; }
+.heat-tile.heat-3 rect { fill: #fcd34d; stroke: #fbbf24; }
+.heat-tile.heat-4 rect { fill: #fb923c; stroke: #f97316; }
+.heat-tile.heat-5 rect { fill: #ef4444; stroke: #dc2626; }
+
+/* The hottest two bands need light text to stay legible. */
+.heat-tile.heat-4 .heat-code, .heat-tile.heat-5 .heat-code,
+.heat-tile.heat-4 .heat-count, .heat-tile.heat-5 .heat-count { fill: #ffffff; }
+
+.heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.heat-key { display: inline-block; width: 1.1rem; height: 0.55rem; border-radius: 3px; }
+.heat-key.heat-1 { background: #dbeafe; }
+.heat-key.heat-2 { background: #bfdbfe; }
+.heat-key.heat-3 { background: #fcd34d; }
+.heat-key.heat-4 { background: #fb923c; }
+.heat-key.heat-5 { background: #ef4444; }

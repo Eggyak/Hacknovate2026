@@ -547,6 +547,71 @@ export function heatmapPanel(data, ctx, { compact = false } = {}) {
 }
 
 /** Fetches the heatmap. An empty one still renders, so failure is quiet. */
+/**
+ * The same figures, for one person's own area.
+ *
+ * A state tile is the right unit for a ministry and the wrong one for a
+ * citizen: "Punjab: 14" tells somebody in Ludhiana nothing. With a pincode
+ * the server groups by district instead, and this draws them as a ranked
+ * bar list rather than a grid - there is no sensible fixed layout for
+ * districts, and ordering by volume is what makes the list readable.
+ */
+export function districtHeatPanel(data, ctx) {
+  const districts = data?.districts || [];
+  const busiest = data?.busiest || 0;
+
+  const rows = districts.slice(0, 12).map((d) => {
+    const band = heatBand(d.total, busiest);
+    const width = busiest > 0 ? Math.max(4, Math.round((d.total / busiest) * 100)) : 0;
+    return `
+      <div class="heat-row">
+        <span class="heat-row-name">${ctx.esc(d.name)}</span>
+        <span class="heat-row-bar"><i class="heat-${band}" style="width:${width}%"></i></span>
+        <span class="heat-row-n tnum">${d.total}</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="card heat-card">
+      <div class="row between wrap mb-2">
+        <div>
+          <h3 style="margin:0">Around you</h3>
+          <p class="small muted" style="margin:2px 0 0">
+            ${data?.area
+              ? `${data.total} complaint(s) across ${districts.length} district(s) in ${ctx.esc(data.area)}`
+              : 'We could not place your area yet.'}
+          </p>
+        </div>
+        <a class="small" href="#/nearby">Open the public board</a>
+      </div>
+
+      ${rows || `<p class="small muted">
+        Nothing has been reported near you yet. This fills in as complaints
+        are filed in your district.</p>`}
+
+      ${districts.length ? `<p class="small muted mt-2">
+        Grouped by district from the complaint pincode. No names, no addresses.</p>` : ''}
+    </div>`;
+}
+
+/**
+ * Where the citizen's own area comes from.
+ *
+ * Their most recent filing, because that is a pincode we already hold and
+ * that they chose. Device coordinates would be the obvious alternative,
+ * but turning a position into a district needs a geocoder we do not have,
+ * and asking for location permission to draw a chart is a poor trade.
+ */
+export async function loadLocalHeatmap(ctx, pincode) {
+  if (!pincode) return null;
+  try {
+    return await ctx.api.get(`/civic/heatmap?scope=district&pincode=${encodeURIComponent(pincode)}`);
+  } catch {
+    return null;
+  }
+}
+
+/** Fetches the heatmap. An empty one still renders, so failure is quiet. */
 export async function loadHeatmap(ctx, params = '') {
   try {
     return await ctx.api.get(`/civic/heatmap${params}`);

@@ -18,7 +18,7 @@ import {
 } from './civicRules.js';
 import { env } from '../lib/env.js';
 import { divisionById } from '../data/divisions.js';
-import { STATES } from '../data/states.js';
+import { STATES, stateForPincode } from '../data/states.js';
 
 // Re-exported so callers import one module, not two.
 export { PRIORITY, PRIORITY_LABEL, scorePriority, clusterSignature };
@@ -459,7 +459,7 @@ export async function transparency() {
  * interview stored. It is mapped back to a code here so the client can
  * place each one without carrying its own copy of the table.
  */
-export async function heatmap({ divisionId = null, days = null } = {}) {
+export async function heatmap({ divisionId = null, days = null, pincode = null } = {}) {
   const where = ['state IS NOT NULL'];
   const params = [];
 
@@ -504,5 +504,73 @@ export async function heatmap({ divisionId = null, days = null } = {}) {
     // its own ceiling, so two charts drawn minutes apart stay comparable.
     busiest: states.reduce((most, s) => Math.max(most, s.total), 0),
     total: states.reduce((sum, s) => sum + s.total, 0),
+  };
+}
+
+
+/**
+ * Complaint density by district, around one pincode.
+ *
+ * The state view answers "where in the country"; a citizen wants "where
+ * near me", and a state is far too coarse for that - Punjab as one tile
+ * tells somebody in Ludhiana nothing they did not know.
+ *
+ * The area is resolved from a pincode rather than from device
+ * coordinates. Latitude and longitude would be the obvious input, but
+ * turning them into a district needs a geocoding service we do not have,
+ * and most filings carry no coordinates at all - so a radius query would
+ * be drawn from the handful of people who shared a position and would
+ * read as if nowhere else had complaints. Every complaint has a pincode,
+ * and every pincode resolves to a state.
+ *
+ * Anonymous filings are included: a district is a large enough area that
+ * a count cannot point at anyone, which is the same reason they stay in
+ * the state figures while being kept off the coordinate map.
+ */
+export async function districtHeatmap({ pincode, divisionId = null, days = null }) {
+  const home = stateForPincode(String(pincode || ''));
+  if (!home) return { scope: 'district', area: null, districts: [], busiest: 0, total: 0 };
+
+  const where = ['state = $1', 'district IS NOT NULL'];
+  const params = [home.name];
+
+  if (divisionId) {
+    params.push(divisionId);
+    where.push(`division_id = $${params.length}`);
+  }
+  if (days) {
+    params.push(Math.min(Number(days) || 365, 3650));
+    where.push(`submitted_at > NOW() - ($${params.length} || ' days')::interval`);
+  }
+
+  const r = await query(
+    `SELECT district,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE status IN ('resolved','closed'))::int AS resolved,
+            COUNT(*) FILTER (WHERE status NOT IN ('resolved','closed','rejected')
+                               AND sla_deadline < NOW())::int AS overdue
+       FROM grievances
+      WHERE ${where.join(' AND ')}
+      GROUP BY district
+      ORDER BY total DESC
+      LIMIT 60`,
+    params,
+  );
+
+  const districts = r.rows.map((row) => ({
+    name: row.district,
+    total: row.total,
+    resolved: row.resolved,
+    overdue: row.overdue,
+    open: row.total - row.resolved,
+  }));
+
+  return {
+    scope: 'district',
+    area: home.name,
+    stateCode: home.code,
+    districts,
+    busiest: districts.reduce((most, d) => Math.max(most, d.total), 0),
+    total: districts.reduce((sum, d) => sum + d.total, 0),
   };
 }
