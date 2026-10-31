@@ -919,6 +919,40 @@ async function runCoreFeatures() {
   check('the heatmap leaks no identity',
     !JSON.stringify(heat).match(/mobile|email|citizen_id|original_text/i), 'clean');
 
+  /*
+   * Spoken callbacks.
+   *
+   * Telephony is not configured in every deployment, so the test is not
+   * "did a phone ring" - it is that the feature refuses cleanly when it
+   * is off, that the public token routes cannot be walked into, and that
+   * a leaked token would yield nothing identifying.
+   */
+  const { data: options } = await apiA('/calls/options');
+  check('callbacks report whether they are available',
+    typeof options.available === 'boolean', `available=${options.available}`);
+  check('all fourteen languages can be chosen for a call',
+    (options.languages || []).length === 14, `${(options.languages || []).length} offered`);
+  check('the call goes to the number on the account, masked',
+    !options.callsTo || /•/.test(options.callsTo), String(options.callsTo));
+  check('and there is no way to name a different number',
+    !JSON.stringify(options).includes('"to"'), 'no recipient field');
+
+  const asked = await apiA('/calls/request', { method: 'POST', body: { language: 'ta' } });
+  if (options.available) {
+    check('a callback can be requested', asked.status === 201, `HTTP ${asked.status}`);
+  } else {
+    check('callbacks refuse cleanly when not configured',
+      asked.status === 503 && Boolean(asked.data?.message), `HTTP ${asked.status}`);
+  }
+
+  const badToken = await fetch(`${BASE}/api/calls/audio/not-a-real-token`);
+  check('an unknown call token yields no audio', badToken.status === 404, `HTTP ${badToken.status}`);
+
+  const badTwiml = await (await fetch(`${BASE}/api/calls/twiml/not-a-real-token`)).text();
+  check('an expired call is refused in speech, not as an error page',
+    badTwiml.includes('<Response>') && /expired/i.test(badTwiml),
+    badTwiml.slice(0, 70));
+
   await query('DELETE FROM citizens WHERE id = ANY($1)', [[a.citizen.id, b.citizen.id]]);
 }
 

@@ -22,6 +22,9 @@ import {
   loadHeatmap,
   districtHeatPanel,
   loadLocalHeatmap,
+  callbackPanel,
+  wireCallback,
+  loadCallbackOptions,
 } from './civic.js';
 
 const api = {
@@ -1185,7 +1188,10 @@ async function viewDashboard() {
    * reasonable thing to show them instead of an empty box.
    */
   const homePincode = (list.grievances || []).map((g) => g.pincode).find(Boolean) || null;
-  const local = await loadLocalHeatmap(civicCtx(), homePincode);
+  const [local, callOptions] = await Promise.all([
+    loadLocalHeatmap(civicCtx(), homePincode),
+    loadCallbackOptions(civicCtx()),
+  ]);
   const heat = local && local.districts && local.districts.length
     ? null
     : await loadHeatmap(civicCtx());
@@ -1228,9 +1234,12 @@ async function viewDashboard() {
         <div id="recentBody"></div>
       </div>
 
-      ${local && local.districts && local.districts.length
-        ? districtHeatPanel(local, civicCtx())
-        : heatmapPanel(heat, civicCtx(), { compact: false })}
+      <div>
+        ${local && local.districts && local.districts.length
+          ? districtHeatPanel(local, civicCtx())
+          : heatmapPanel(heat, civicCtx(), { compact: false })}
+        ${callbackPanel(callOptions, civicCtx())}
+      </div>
     </div>
 
     <div class="card">
@@ -1271,6 +1280,7 @@ async function viewDashboard() {
     </div>`);
 
   renderRecent();
+  wireCallback(civicCtx(), () => viewDashboard());
 }
 
 function renderRecent() {

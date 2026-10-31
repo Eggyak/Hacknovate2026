@@ -104,6 +104,7 @@ mobileRouter.get('/manifest', (_req, res) => {
       transparencyBoard: true,
       anonymousFiling: true,
       escalation: true,
+      spokenCallback: caps.spokenCallback,
     },
 
     /*

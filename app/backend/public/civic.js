@@ -619,3 +619,98 @@ export async function loadHeatmap(ctx, params = '') {
     return { states: [], busiest: 0, total: 0 };
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Spoken status callback
+ * ------------------------------------------------------------------ */
+
+/**
+ * "Call me and tell me."
+ *
+ * The portal already reads in fourteen languages and the bot already
+ * speaks them, but all of that still assumes a screen and a literate
+ * reader. A grievance system whose status is only legible to people who
+ * can read it has the same gap as one that only accepts written English -
+ * just moved one step later in the process.
+ *
+ * So: pick a language, the system rings the number already on the account,
+ * and a synthesised voice reads back where the case has got to. There is
+ * no field to type a number into, deliberately - this cannot be pointed at
+ * anybody else's phone.
+ */
+export function callbackPanel(options, ctx) {
+  if (!options) return '';
+
+  if (!options.available) {
+    return `
+      <div class="card mb-4">
+        <h3 class="mb-2">Hear your status</h3>
+        <p class="small muted">${ctx.esc(options.unavailableReason || 'Not available yet.')}</p>
+      </div>`;
+  }
+
+  const languages = (options.languages || []).map((l) => `
+    <option value="${ctx.esc(l.code)}">${ctx.esc(l.native || l.name)}</option>`).join('');
+
+  const last = (options.recent || [])[0];
+  const lastLine = last
+    ? `<p class="small muted mt-2">Last request: ${ctx.esc(last.status)}${
+        last.requested_at ? ` on ${ctx.fmtDate(last.requested_at)}` : ''
+      }.</p>`
+    : '';
+
+  return `
+    <div class="card mb-4" id="callbackCard">
+      <h3 class="mb-2">Hear your status</h3>
+      <p class="small muted">
+        We will ring ${options.callsTo ? `<b>${ctx.esc(options.callsTo)}</b>` : 'your registered number'}
+        and read out where your most recent grievance has got to. Status only &mdash;
+        your complaint is never read aloud.
+      </p>
+
+      <label class="small muted mt-2" for="callLang">Language for the call</label>
+      <select id="callLang" class="select">${languages}</select>
+
+      <button class="btn primary mt-2" id="callNow" style="width:100%">
+        Call me now
+      </button>
+      ${lastLine}
+      <p class="small muted mt-1" id="callResult"></p>
+    </div>`;
+}
+
+/** Wires the button. Called once the card is in the DOM. */
+export function wireCallback(ctx, onDone) {
+  const button = document.querySelector('#callNow');
+  if (!button) return;
+
+  button.addEventListener('click', async () => {
+    const language = document.querySelector('#callLang')?.value || 'en';
+    const result = document.querySelector('#callResult');
+
+    button.disabled = true;
+    if (result) result.textContent = 'Requesting…';
+
+    try {
+      const reply = await ctx.api.post('/calls/request', { language });
+      if (result) result.textContent = reply.message || 'Your phone will ring shortly.';
+      ctx.toast(reply.message || 'Call requested.', 'good');
+      if (onDone) await onDone();
+    } catch (err) {
+      if (result) result.textContent = err.message;
+      ctx.toast(err.message, 'bad');
+      // Re-enabled only on failure: a queued call should not be asked for
+      // twice because the first one has not rung yet.
+      button.disabled = false;
+    }
+  });
+}
+
+/** Options for the card. Absent means the panel simply is not drawn. */
+export async function loadCallbackOptions(ctx) {
+  try {
+    return await ctx.api.get('/calls/options');
+  } catch {
+    return null;
+  }
+}

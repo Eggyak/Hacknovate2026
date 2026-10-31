@@ -90,6 +90,18 @@ export const env = {
   sla: {
     days: num('SLA_DAYS', 21),
   },
+
+  /*
+   * Spoken status callbacks.
+   *
+   * A webhook, like the OTP path, and for the same reason: the telephony
+   * credentials belong to the workflow engine, not to this process. This
+   * service decides a call is owed and what it should say; it cannot dial.
+   */
+  callbacks: {
+    webhookUrl: str('N8N_CALLBACK_WEBHOOK_URL'),
+    secret: str('CALLBACK_SHARED_SECRET'),
+  },
 };
 
 /** Feature availability, surfaced to the UI so it never offers a dead button. */
@@ -101,6 +113,9 @@ export function capabilities() {
     llm: Boolean(env.mistral.apiKey),
     smsOtp: Boolean(env.otp.webhookUrl),
     departmentSync: Boolean(env.govt.baseUrl && env.govt.serviceKey),
+    // A spoken callback needs a dialler to hand the job to AND a voice to
+    // read it with; either one missing means the button should not appear.
+    spokenCallback: Boolean(env.callbacks.webhookUrl && env.azureSpeech.key),
   };
 }
 

@@ -16,6 +16,7 @@ import { grievanceRouter } from './routes/grievances.js';
 import { i18nRouter, i18nStats } from './routes/i18n.js';
 import { mobileRouter } from './routes/mobile.js';
 import { civicRouter } from './routes/civic.js';
+import { callsRouter } from './routes/calls.js';
 import { escalateOverdue } from './services/civic.js';
 import { probe as speechProbe } from './services/azureSpeech.js';
 import { probe as translateProbe } from './services/translate.js';
@@ -92,6 +93,7 @@ app.use('/api/i18n', i18nRouter);
 app.use('/api/mobile', mobileRouter);
 // Core Features: support, comments, ratings, and the public civic views.
 app.use('/api/civic', civicRouter);
+app.use('/api/calls', callsRouter);
 
 app.use(
   express.static(FRONTEND, {
