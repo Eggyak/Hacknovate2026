@@ -302,10 +302,18 @@ export async function noteResponse(grievanceId, { resolved = false } = {}) {
  * Coordinates are rounded to about 100 metres. A complaint about a specific
  * house, pinned exactly on a public map, identifies the household that made
  * it - which is the opposite of what an anonymous filing option is for.
+ *
+ * Which is why a filing marked anonymous is left off this map entirely.
+ * Rounding is enough for an ordinary complaint and not enough for one
+ * somebody asked to keep quiet: a hundred metres in a village is one
+ * street. It stays in the state-level heatmap, where a whole state is far
+ * too coarse to point at anyone, and the handling department sees it in
+ * full - an anonymous complaint is hidden from the public, not from the
+ * officer who has to investigate it.
  */
 export async function publicMap({ pincode, division, status, limit = 200 }) {
   const params = [];
-  const where = ['g.latitude IS NOT NULL', 'g.longitude IS NOT NULL'];
+  const where = ['g.latitude IS NOT NULL', 'g.longitude IS NOT NULL', 'g.anonymous = FALSE'];
 
   if (pincode) { params.push(String(pincode)); where.push(`g.pincode = $${params.length}`); }
   if (division) { params.push(String(division)); where.push(`g.division_id = $${params.length}`); }

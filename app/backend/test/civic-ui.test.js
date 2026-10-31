@@ -182,3 +182,35 @@ test('the new controls scale with the text-size setting', () => {
     'a px font-size in the new rules will not respond to the text-size control',
   );
 });
+
+test('anonymous filing is offered, and does something', () => {
+  /*
+   * The anonymous column sat in the schema for a while with nothing
+   * reading it, so the setting could have been shipped as a switch wired
+   * to nothing. The guard is in two halves on purpose: the control exists,
+   * and the server actually filters on it.
+   */
+  assert.ok(/anonFiling/.test(app), 'there is no way to file anonymously');
+  assert.ok(
+    /anonymous: state\.fileAnonymously/.test(app),
+    'the choice is never sent to the server',
+  );
+
+  const civicService = readFileSync(
+    join(HERE, '..', 'src', 'services', 'civic.js'),
+    'utf8',
+  );
+  assert.ok(
+    /g\.anonymous = FALSE/.test(civicService),
+    'the public map does not filter anonymous filings, so the switch does nothing',
+  );
+});
+
+test('the heatmap is offered on the dashboard and the public page', () => {
+  assert.ok(/heatmapPanel\(heat/.test(app), 'the dashboard has no heatmap');
+  assert.ok(/STATE_GRID/.test(civic), 'the tile grid is gone');
+  assert.ok(
+    /Not a boundary map/.test(civic),
+    'the caption that stops this being read as a border map is gone',
+  );
+});

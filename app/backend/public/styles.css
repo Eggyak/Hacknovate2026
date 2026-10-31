@@ -976,3 +976,43 @@ table.data tr.row:hover { background: var(--surface-2); cursor: pointer; }
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+
+/* ---------- Anonymous filing ---------- */
+
+/*
+ * Full width above the declaration buttons, not a chip beside them. It is
+ * a different kind of decision from "yes, this is true", and sitting it in
+ * the same row would invite a mis-click on the one choice here that cannot
+ * be taken back after filing.
+ */
+.anon-toggle {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  background: var(--surface-2, #f7f8fa);
+  cursor: pointer;
+}
+
+.anon-toggle input {
+  margin-top: 0.15rem;
+  flex: none;
+}
+
+.anon-toggle b {
+  display: block;
+  font-size: 0.85rem;
+}
+
+.anon-toggle small {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--ink-2, #5b6672);
+}

@@ -885,6 +885,30 @@ async function runCoreFeatures() {
    * out of the import list, which is a 500 that nothing else would have
    * caught until a citizen opened the page.
    */
+  /*
+   * Anonymous filing, checked for an actual effect.
+   *
+   * The column existed for a while with nothing reading it, so the setting
+   * could be offered and do nothing at all. The test is not "was the flag
+   * stored" - it is "did the complaint leave the public map".
+   */
+  const mapBefore = await (await fetch(`${BASE}/api/civic/map`)).json();
+  const plottedBefore = (mapBefore.points || []).length;
+
+  await query('UPDATE grievances SET anonymous = TRUE WHERE id = $1', [rowA.id]);
+  const mapAfter = await (await fetch(`${BASE}/api/civic/map`)).json();
+  const plottedAfter = (mapAfter.points || []).length;
+
+  check('an anonymous filing leaves the public map',
+    rowA.latitude === null || plottedAfter < plottedBefore || plottedBefore === 0,
+    `${plottedBefore} -> ${plottedAfter} point(s)`);
+
+  const heatAnon = await (await fetch(`${BASE}/api/civic/heatmap`)).json();
+  check('but still counts in the state figures',
+    heatAnon.total >= 2, `total ${heatAnon.total}`);
+
+  await query('UPDATE grievances SET anonymous = FALSE WHERE id = $1', [rowA.id]);
+
   const heat = await (await fetch(`${BASE}/api/civic/heatmap`)).json();
   check('the heatmap answers', Array.isArray(heat.states), JSON.stringify(heat).slice(0, 80));
   check('the heatmap counts the two reports',

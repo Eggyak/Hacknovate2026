@@ -63,6 +63,15 @@ const state = {
   recentExpanded: false,
   lastPipeline: null,
   lidCandidates: [],
+  /*
+   * Whether this filing goes out anonymously.
+   *
+   * Lives on the interview rather than the account: it is a decision about
+   * one complaint, not a standing preference. Somebody reporting their own
+   * landlord may want it; the same person reporting a pothole next week
+   * probably does not.
+   */
+  fileAnonymously: false,
 };
 
 /* ---------- small helpers ---------- */
@@ -1430,6 +1439,9 @@ function replayTranscript(turns) {
 
 /** Leave the current interview where it is and open a clean one. */
 async function startFreshChat() {
+  // A new interview is a new decision.
+  state.fileAnonymously = false;
+
   state.activeConversationId = null;
   state.conversation = null;
   state.lastPipeline = null;
@@ -1766,9 +1778,29 @@ function renderAffordance(r) {
   }
 
   if (kind === 'declaration') {
+    /*
+     * Offered here and nowhere earlier.
+     *
+     * Asking at the start, before anyone knows what they are about to
+     * describe, gets a shrug. Asking once the complaint is written and the
+     * division is known is the moment the answer actually means something.
+     */
     chips.innerHTML = `
+      <label class="anon-toggle">
+        <input type="checkbox" id="anonFiling" ${state.fileAnonymously ? 'checked' : ''}>
+        <span>
+          <b>File this anonymously</b>
+          <small>Your complaint is kept off the public map, so no one can tie
+          it to a street. It still counts in the state figures. The handling
+          department sees it in full &mdash; a complaint nobody can be
+          contacted about cannot be investigated.</small>
+        </span>
+      </label>
       <button class="chip on" data-dec="1">I declare this is true</button>
       <button class="chip" data-dec="0">Not yet</button>`;
+
+    const anonBox = $('#anonFiling', chips);
+    if (anonBox) anonBox.onchange = () => { state.fileAnonymously = anonBox.checked; };
     $$('[data-dec]', chips).forEach((b) => {
       b.onclick = async () => {
         const r2 = await api.post(`/chat/${state.conversation.conversationId}/declaration`, {
@@ -2000,7 +2032,9 @@ function renderTrace(pipeline) {
 /** Everything is collected: submit and show the docket. */
 async function finishUp() {
   try {
-    const r = await api.post(`/chat/${state.conversation.conversationId}/submit`, {});
+    const r = await api.post(`/chat/${state.conversation.conversationId}/submit`, {
+      anonymous: state.fileAnonymously,
+    });
     speech.say(r.spoken, state.conversation.language);
 
     setView(`
@@ -2009,6 +2043,10 @@ async function finishUp() {
           <div class="badge ok" style="font-size:13px">Registered</div>
           <h1 class="mt-3">Your grievance is filed</h1>
           <p class="muted">Keep this docket number. You can track it any time.</p>
+          ${state.fileAnonymously ? `
+            <p class="small" style="color:var(--accent);font-weight:600">
+              Filed anonymously. This complaint is not shown on the public map.
+            </p>` : ''}
           <p style="font-size:26px;font-weight:800" class="tnum mt-3">${esc(r.reference)}</p>
           <div class="notice info mt-4" style="text-align:start">
             <span>Routed to <b>${esc(r.division.name)}</b>. A reply is due by

@@ -219,8 +219,21 @@ chatRouter.post('/:id/submit', async (req, res, next) => {
       if (s.ok) subject = s.subject;
     }
 
+    /*
+     * Anonymous filing is decided here, at submission.
+     *
+     * It hides the complainant from the PUBLIC surfaces - the map, the
+     * cluster, the comment thread - and from nobody else. The handling
+     * department still sees who filed, because a grievance with no
+     * identifiable complainant cannot be investigated and promising
+     * otherwise would be a lie told to someone reporting a crime. The UI
+     * says exactly that beside the control.
+     */
+    const anonymous = req.body?.anonymous === true;
+
     const { grievance } = await createGrievance({
       citizenId: req.citizen.id,
+      anonymous,
       divisionId: d.divisionId,
       originalText: d.originalText,
       translatedText: d.translatedText,
