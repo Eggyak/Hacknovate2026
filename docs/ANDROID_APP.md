@@ -837,10 +837,52 @@ Say so in the app rather than faking it:
   re-evaluate on a timer.
 - **No idempotency on intake.** A retried forward creates a second case.
 
+### Closed since this was written
+
+- **The officer can now reply.** Every part of that loop existed except the
+  control: the endpoints, and the citizen portal's poll of
+  `/api/intake/replies` that puts a reply on the complainant's own timeline.
+  The workspace has a Correspondence tab now.
+- **Core Features are visible.** Grouping, support, case comments, ratings,
+  the public map and the transparency board had worked on the server for
+  some time while no screen showed any of them.
+
+---
+
+## 17. The app itself
+
+Built at `E:\MHA`, Kotlin and Compose, and **not compiled** - Gradle cannot
+start in the environment it was written in (`java.io.IOException: Unable to
+establish loopback connection`). Expect a first `./gradlew assembleDebug` in
+Android Studio to surface what a compiler catches and a reader does not, and
+expect the dependency versions in `gradle/libs.versions.toml` to be the most
+likely thing to need correcting.
+
+Three checks run without Gradle and all pass. They are in `tools/` in that
+repository and are worth running before any build:
+
+| | |
+|---|---|
+| `import_check.py` | 35 files, no symbol used without an import |
+| `model_check.py` | 328 properties, every one nullable or defaulted, so a field dropped server-side cannot crash a screen at parse time; also diffs the live payloads against the models |
+| `contract_check.py` | all 46 endpoints the Retrofit interfaces declare are served by the live deployments |
+
+Between them they found three defects that reading had missed: a `TextStyle`
+built with a positional argument that is `color` rather than `fontFamily`; a
+`details` map typed `Map<String, String?>` when the department forwards an
+amount as a JSON number, which would have thrown on every cyber-fraud case;
+and three civic models written from the SQL rather than from what the
+service serves, every field name wrong.
+
+Deliberately not built, and said in the app rather than faked: Azure's
+continuous language identification for dictation (the platform recogniser is
+used, pinned to the interview's language), in-app UI translation, map tiles,
+and staff administration.
+
 ---
 
 *Both backends are deployed and all behaviour above has been exercised
-end to end: 109 citizen checks, 57 department RBAC scenarios, and a full
-round trip from a filed complaint through an officer's action back to the
-citizen's timeline. Where this document and the running code disagree, the
-code is right — and that is a bug in this document.*
+end to end: 131 citizen checks, 48 citizen unit tests, 57 department RBAC
+scenarios, and a full round trip from a filed complaint through an officer's
+action back to the citizen's timeline. Where this document and the running
+code disagree, the code is right - and that is a bug in this document.*
