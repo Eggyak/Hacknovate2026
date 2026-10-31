@@ -703,3 +703,90 @@ html::-webkit-scrollbar,body::-webkit-scrollbar,#root::-webkit-scrollbar{display
   #mha-portal-tools .pt-label { display: none; }
   #mha-portal-tools { top: 6px; right: 8px; padding: 5px 8px; }
 }
+
+/* ---------- Correspondence with the complainant ---------- */
+
+/*
+ * The officer's side of a loop that already existed everywhere else: the
+ * endpoints were here and the citizen portal was already collecting what
+ * they returned, so a reply written here lands on the complainant's own
+ * case timeline.
+ */
+.drawer-note {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.drawer-note-bad {
+  color: var(--coral);
+  background: var(--coral-light);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.reply-thread {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.reply-thread li {
+  background: var(--forest-light);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.reply-thread p {
+  margin: 0 0 4px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  /* An officer's reply is prose they typed, newlines and all. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.reply-thread span {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.reply-compose {
+  display: grid;
+  gap: 6px;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.reply-compose textarea {
+  font: inherit;
+  font-size: 0.85rem;
+  letter-spacing: normal;
+  color: var(--ink);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  resize: vertical;
+}
+
+.reply-compose textarea:focus-visible {
+  outline: 2px solid var(--forest);
+  outline-offset: 1px;
+}
+
+.reply-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.reply-actions span {
+  font-size: 0.72rem;
+  color: var(--muted);
+}

@@ -134,6 +134,27 @@ export interface TicketBase {
   evidence: EvidenceAttachment[];
   /** Optional official response entered by the handling officer. */
   actionTakenReport?: string;
+  /**
+   * The citizen portal's own docket number for this case.
+   *
+   * Sent with every forwarded complaint so the two systems can be matched
+   * without relying on a name and a timestamp. Optional because a case
+   * submitted directly to this portal has no counterpart over there.
+   */
+  citizenReference?: string;
+}
+
+/**
+ * A reply from an officer, which the citizen portal collects and shows on
+ * the complainant's own timeline.
+ *
+ * snake_case because these come straight off the SQLite rows.
+ */
+export interface TicketReply {
+  id: number;
+  author_name: string;
+  body: string;
+  created_at: string;
 }
 
 export interface CybercrimeDetails {

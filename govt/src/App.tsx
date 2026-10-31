@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { mountPortalTools } from './portalTools';
-import type { AccessLevel, Permission, Role, Ticket, TicketStatus, User, Ward } from './types/grievance';
+import type {
+  TicketReply, AccessLevel, Permission, Role, Ticket, TicketStatus, User, Ward } from './types/grievance';
 import { roles as initialRoles, tickets as initialTickets, wards as initialWards } from './data/mockData';
 
 export interface ActivityEvent {
@@ -1941,7 +1942,68 @@ function TicketDrawer({
 }) {
   const [status, setStatus] = useState<TicketStatus>(ticket.status);
   const [report, setReport] = useState(ticket.actionTakenReport ?? '');
-  const [tab, setTab] = useState<'context' | 'timeline'>('context');
+  const [tab, setTab] = useState<'context' | 'timeline' | 'replies'>('context');
+
+  /*
+   * The correspondence thread.
+   *
+   * Every piece of this loop existed except the box to type in: the
+   * endpoints were here, and the citizen portal already polls
+   * /api/intake/replies and puts what it finds on the complainant's own
+   * timeline. So an officer could resolve a case but could not say a word
+   * to the person who raised it.
+   */
+  const [replies, setReplies] = useState<TicketReply[] | null>(null);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+
+  const loadReplies = async () => {
+    try {
+      const found = await api<{ replies: TicketReply[] }>(
+        `/api/tickets/${encodeURIComponent(ticket.id)}/replies`,
+      );
+      setReplies(found.replies ?? []);
+      setReplyError(null);
+    } catch (error) {
+      setReplies([]);
+      setReplyError(error instanceof Error ? error.message : 'Could not load the thread.');
+    }
+  };
+
+  // Fetched when the tab is opened, not with the case: most of the time
+  // nobody looks, and the drawer opens on every row click.
+  useEffect(() => {
+    if (tab === 'replies' && replies === null) void loadReplies();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, ticket.id]);
+
+  // A different case in the same drawer is a different thread.
+  useEffect(() => {
+    setReplies(null);
+    setDraft('');
+    setReplyError(null);
+  }, [ticket.id]);
+
+  const sendReply = async () => {
+    const body = draft.trim();
+    if (body.length < 2 || sending) return;
+
+    setSending(true);
+    setReplyError(null);
+    try {
+      await api(`/api/tickets/${encodeURIComponent(ticket.id)}/reply`, {
+        method: 'POST',
+        body: JSON.stringify({ body }),
+      });
+      setDraft('');
+      await loadReplies();
+    } catch (error) {
+      setReplyError(error instanceof Error ? error.message : 'The reply was not sent.');
+    } finally {
+      setSending(false);
+    }
+  };
   const [routeDivision, setRouteDivision] = useState('CYBER_INFORMATION_SECURITY');
   const canTriageOther = role.accessLevel === 'OTHER_CASE_TRIAGE' && ticket.category === 'OTHER';
 
@@ -2005,9 +2067,70 @@ function TicketDrawer({
         <button className={tab === 'timeline' ? 'selected' : ''} onClick={() => setTab('timeline')}>
           Case Timeline
         </button>
+        <button className={tab === 'replies' ? 'selected' : ''} onClick={() => setTab('replies')}>
+          Correspondence
+          {replies && replies.length > 0 ? ` (${replies.length})` : ''}
+        </button>
       </div>
 
-      {tab === 'context' ? (
+      {tab === 'replies' ? (
+        <div className="drawer-body">
+          <div className="case-tags">
+            <span className="category-pill">Visible to the complainant</span>
+            {ticket.citizenReference && (
+              <span className="language-pill">Their ref: {ticket.citizenReference}</span>
+            )}
+          </div>
+
+          <p className="drawer-note">
+            Anything written here is delivered to the citizen and appears on their own
+            case timeline. It is recorded against your account.
+          </p>
+
+          {replyError && <p className="drawer-note drawer-note-bad">{replyError}</p>}
+
+          {replies === null ? (
+            <p className="drawer-note">Loading the thread&hellip;</p>
+          ) : replies.length === 0 ? (
+            <p className="drawer-note">
+              Nothing has been sent to this complainant yet.
+            </p>
+          ) : (
+            <ul className="reply-thread">
+              {replies.map((entry) => (
+                <li key={entry.id}>
+                  <p>{entry.body}</p>
+                  <span>
+                    {entry.author_name} &middot; {formatDate(entry.created_at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <label className="reply-compose">
+            WRITE TO THE COMPLAINANT
+            <textarea
+              rows={4}
+              maxLength={2000}
+              value={draft}
+              disabled={sending}
+              placeholder="What has been done, what is needed from them, or what happens next."
+              onChange={(event) => setDraft(event.target.value)}
+            />
+          </label>
+          <div className="reply-actions">
+            <span>{draft.trim().length}/2000</span>
+            <button
+              className="button button-primary"
+              disabled={draft.trim().length < 2 || sending}
+              onClick={() => void sendReply()}
+            >
+              {sending ? 'Sending\u2026' : 'Send reply'}
+            </button>
+          </div>
+        </div>
+      ) : tab === 'context' ? (
         <div className="drawer-body">
           <div className="case-tags">
             <span className="category-pill">{categoryLabel(ticket.category)}</span>
