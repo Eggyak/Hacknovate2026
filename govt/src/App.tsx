@@ -286,10 +286,6 @@ export default function App() {
     // Text size and language, available on every screen including sign-in.
     mountPortalTools();
 
-    // Whether this deployment asks for a departmental access key is the
-    // server's decision, not the form's; ask rather than assume.
-      .catch(() => {});
-
     Promise.all([api<{ user: User; role: Role }>('/api/auth/me'), api<{ needsInitialAdmin: boolean }>('/api/auth/setup-status')])
       .then(async ([, setup]) => {
         if (!active) return;
