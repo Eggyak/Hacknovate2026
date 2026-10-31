@@ -2419,7 +2419,18 @@ async function route() {
   const onGateway = !state.citizen && (hash === '#/signin' || hash === '#/signup');
   document.body.classList.toggle('auth-mode', onGateway);
 
-  if (!state.citizen && hash !== '#/track') {
+  /*
+   * Two pages need no session, because the endpoints behind them need none.
+   *
+   * Tracking by docket number is for somebody who filed on another device
+   * or has lost their sign-in. Nearby is the transparency board, and the
+   * whole point of publishing a division's record is that it can be read
+   * before you decide to trust it with a complaint - demanding an account
+   * first would make it something other than public.
+   */
+  const noSignInNeeded = new Set(['#/track', '#/nearby']);
+
+  if (!state.citizen && !noSignInNeeded.has(hash)) {
     if (!onGateway) { location.hash = '#/signin'; return; }
     renderChrome();
     viewAuth(hash === '#/signup' ? 'signup' : 'signin');
