@@ -1,7 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { mountPortalTools } from './portalTools';
 import type {
-  TicketReply, AccessLevel, Permission, Role, Ticket, TicketStatus, User, Ward } from './types/grievance';
+  AccessLevel,
+  AnalyticsSummary,
+  Permission,
+  Role,
+  Ticket,
+  TicketReply,
+  TicketStatus,
+  User,
+  Ward,
+} from './types/grievance';
 import { roles as initialRoles, tickets as initialTickets, wards as initialWards } from './data/mockData';
 
 export interface ActivityEvent {
@@ -81,6 +90,20 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return result as T;
 }
 
+/**
+ * Hours, said the way a person would say them.
+ *
+ * "41.2 hours" is arithmetic, not an answer. Past a day it reads in days,
+ * under an hour in minutes, and a missing figure says so rather than
+ * rendering as a confident zero.
+ */
+function formatHours(hours: number | null | undefined) {
+  if (hours === null || hours === undefined) return 'Not yet measurable';
+  if (hours < 1) return `${Math.round(hours * 60)} min`;
+  if (hours < 48) return `${Math.round(hours * 10) / 10} hrs`;
+  return `${Math.round((hours / 24) * 10) / 10} days`;
+}
+
 function friendlyStatus(status: TicketStatus) {
   return status === 'PENDING' ? 'Pending' : status === 'UNDER_INVESTIGATION' ? 'In progress' : 'Resolved';
 }
@@ -124,6 +147,17 @@ function prettyKey(key: string) {
 export default function App() {
   const [roles, setRoles] = useState<Role[]>(initialRoles);
   const [users, setUsers] = useState<User[]>([]);
+
+  /*
+   * Figures from the server, not recomputed here.
+   *
+   * The tile counts above are derived from the loaded tickets, which is
+   * fine because they are simple sums of rows already in hand. Response
+   * times are not: they need the first-action and resolution timestamps
+   * averaged over the officer's whole scope, which the server already
+   * scopes and the client only has a page of.
+   */
+  const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [wardList, setWardList] = useState(initialWards);
@@ -224,6 +258,14 @@ export default function App() {
       setUsers(data.users || []);
       setWardList(data.wards || initialWards);
       if (data.activities) setActivities(data.activities);
+
+      // Analytics is a separate call because not every role may read it;
+      // a refusal here must not take the whole dashboard down with it.
+      if (data.role.permissions.includes('analytics:view')) {
+        api<AnalyticsSummary>('/api/analytics/summary')
+          .then(setAnalytics)
+          .catch(() => setAnalytics(null));
+      }
       if (data.user.roleId === 'ROLE-SUPER-ADMIN') {
         setActiveView('users');
       } else {
@@ -402,6 +444,7 @@ export default function App() {
       setAccountMenuOpen(false);
       setNotificationMenuOpen(false);
       setUsers([]);
+      setAnalytics(null);
       setRoles(initialRoles);
       setActiveView('dashboard');
     }
@@ -533,6 +576,75 @@ export default function App() {
       setToast(`Permissions updated for ${saved.name}.`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'Failed to save role permissions.');
+    }
+  };
+
+  /**
+   * The officer's own queue, as a spreadsheet.
+   *
+   * Built with a Blob rather than a data: URL. The audit export below uses
+   * encodeURI on a data URL, which mangles a '#' and chokes on the Devanagari
+   * and Tamil that a complainant's own words are written in - and those are
+   * exactly the rows somebody would export.
+   */
+  const downloadCaseCsv = () => {
+    const headers = [
+      'Docket', 'Citizen reference', 'Status', 'SLA', 'Category', 'Division',
+      'Ward', 'District', 'Complainant', 'Filed', 'Deadline', 'First action',
+      'Resolved', 'Assigned to', 'Summary',
+    ];
+
+    const cell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+
+    const rows = allowedTickets.map((t) => [
+      t.grievanceId, t.citizenReference ?? '', t.status, t.slaStatus, t.category,
+      t.divisionId, t.wardId, t.location?.district ?? '', t.complainantName,
+      t.submissionTimestamp, t.slaDeadline, t.firstActionAt ?? '', t.resolvedAt ?? '',
+      users.find((u) => u.id === t.assignedUserId)?.name ?? '',
+      (t.translatedEnglishText || t.originalRegionalText || '').slice(0, 300),
+    ].map(cell));
+
+    // The BOM is what makes Excel open a UTF-8 CSV as UTF-8 rather than as
+    // the local codepage, which is the difference between a citizen's name
+    // and a row of question marks.
+    const csv = '\uFEFF' + [headers.map(cell).join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `mha-cases-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setToast(`${allowedTickets.length} case(s) exported.`);
+  };
+
+  /*
+   * PDF via the browser's own print dialog.
+   *
+   * A PDF library would add a megabyte to the bundle and its own font
+   * problems for nine Indic scripts. Every browser can already print the
+   * page to PDF with the fonts it is rendering, so the stylesheet has a
+   * print block and this opens the dialog.
+   */
+  const printCaseReport = () => {
+    setToast('Choose "Save as PDF" in the print dialog.');
+    window.setTimeout(() => window.print(), 150);
+  };
+
+  const assignTicket = async (id: string, assignedUserId: string | null) => {
+    try {
+      const saved = await api<Ticket>(`/api/tickets/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: tickets.find((t) => t.id === id)?.status, assignedUserId }),
+      });
+      setTickets((curr) => curr.map((t) => (t.id === id ? saved : t)));
+      setToast(assignedUserId
+        ? `Assigned to ${users.find((u) => u.id === assignedUserId)?.name ?? 'officer'}.`
+        : 'Assignment cleared.');
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Could not assign the case.');
     }
   };
 
@@ -838,6 +950,58 @@ export default function App() {
                           </div>
                         );
                       })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Response time + assignment, from the server's own figures */}
+                <div className="panel" style={{ marginTop: '14px' }}>
+                  <div className="panel-head">
+                    <h3>Response Time</h3>
+                    <span className="table-secondary">Measured across your scope</span>
+                  </div>
+                  <div className="panel-body">
+                    {analytics?.responseTime ? (
+                      <div className="rt-grid">
+                        <div className="rt-metric">
+                          <span className="eyebrow">TO FIRST ACTION</span>
+                          <b>{formatHours(analytics.responseTime.averageFirstActionHours)}</b>
+                          {/* The sample size, always. An average over three
+                              cases is not the same claim as one over three
+                              hundred, and only one of them is worth acting on. */}
+                          <span className="table-secondary">
+                            over {analytics.responseTime.actedOn} case(s) acted on
+                          </span>
+                        </div>
+                        <div className="rt-metric">
+                          <span className="eyebrow">TO RESOLUTION</span>
+                          <b>{formatHours(analytics.responseTime.averageResolutionHours)}</b>
+                          <span className="table-secondary">
+                            over {analytics.responseTime.closed} case(s) closed
+                          </span>
+                        </div>
+                        <div className="rt-metric">
+                          <span className="eyebrow">ASSIGNED</span>
+                          <b>{analytics.assignment.assigned}</b>
+                          <span className="table-secondary">
+                            {analytics.assignment.unassigned} still without an owner
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="table-secondary">
+                        No response-time figures yet. They appear once cases in your scope
+                        have been acted on.
+                      </p>
+                    )}
+
+                    <div className="rt-actions">
+                      <button className="button button-quiet button-small" onClick={downloadCaseCsv}>
+                        Export cases (CSV)
+                      </button>
+                      <button className="button button-quiet button-small" onClick={printCaseReport}>
+                        Print / Save as PDF
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1470,9 +1634,11 @@ export default function App() {
           <TicketDrawer
             ticket={selectedTicket}
             role={activeRole}
+            staff={users}
             onClose={() => setSelectedTicketId(null)}
             onSubmit={submitReport}
             onRoute={routeOtherCase}
+            onAssign={assignTicket}
           />
         </>
       )}
@@ -1930,15 +2096,19 @@ function SignInScreen({
 function TicketDrawer({
   ticket,
   role,
+  staff,
   onClose,
   onSubmit,
   onRoute,
+  onAssign,
 }: {
   ticket: Ticket;
   role: Role;
+  staff: User[];
   onClose: () => void;
   onSubmit: (id: string, status: TicketStatus, report: string) => void;
   onRoute: (id: string, divisionId: string) => void;
+  onAssign: (id: string, assignedUserId: string | null) => void;
 }) {
   const [status, setStatus] = useState<TicketStatus>(ticket.status);
   const [report, setReport] = useState(ticket.actionTakenReport ?? '');
@@ -2253,6 +2423,39 @@ function TicketDrawer({
                 <p>{ticket.actionTakenReport}</p>
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+      {/*
+        * Assignment sits outside the tab body, above the action desk,
+        * because it applies to the case no matter which tab is open -
+        * and because an unowned case is the single most useful thing to
+        * notice while reading one.
+        */}
+      {(role.permissions.includes('tickets:resolve') || role.permissions.includes('tickets:reroute')) && (
+        <div className="assign-bar">
+          <label>
+            ASSIGNED OFFICER
+            <select
+              className="select"
+              value={ticket.assignedUserId ?? ''}
+              onChange={(event) => onAssign(ticket.id, event.target.value || null)}
+            >
+              <option value="">Unassigned &mdash; sitting with the desk</option>
+              {staff
+                .filter((member) => member.isActive)
+                .map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          {ticket.firstActionAt && (
+            <span className="table-secondary">
+              First acted on {formatDate(ticket.firstActionAt)}
+            </span>
           )}
         </div>
       )}

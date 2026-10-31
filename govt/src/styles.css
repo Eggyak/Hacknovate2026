@@ -790,3 +790,93 @@ html::-webkit-scrollbar,body::-webkit-scrollbar,#root::-webkit-scrollbar{display
   font-size: 0.72rem;
   color: var(--muted);
 }
+
+
+/* ---------- Response time, assignment, and printing ---------- */
+
+.rt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 14px;
+}
+
+.rt-metric {
+  display: grid;
+  gap: 2px;
+  padding: 12px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.rt-metric b {
+  font-size: 1.15rem;
+  color: var(--forest);
+}
+
+.rt-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.assign-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 22px;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.assign-bar label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  flex: 1 1 14rem;
+}
+
+/*
+ * Printing is how a PDF gets made here.
+ *
+ * A PDF library would add a megabyte to the bundle and bring its own font
+ * trouble across nine Indic scripts, when every browser can already print
+ * what it is rendering, with the fonts it is already using. So the chrome
+ * is hidden and the panels are allowed to break across pages.
+ */
+@media print {
+  .app-sidebar,
+  .app-header,
+  .drawer-scrim,
+  .ticket-drawer,
+  .rt-actions,
+  .portal-tools,
+  button {
+    display: none !important;
+  }
+
+  .app-shell,
+  .app-main {
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+
+  .panel,
+  .stat-card {
+    break-inside: avoid;
+    border: 1px solid #999;
+  }
+
+  /* Black on white: a printed page is not a dark-mode surface, and a
+     coloured block costs ink for nothing. */
+  body {
+    background: #fff;
+    color: #000;
+  }
+}

@@ -142,6 +142,33 @@ export interface TicketBase {
    * submitted directly to this portal has no counterpart over there.
    */
   citizenReference?: string;
+  /** The officer who owns this case, as distinct from the desk it sits on. */
+  assignedUserId?: string | null;
+  /** When a member of staff first acted, and when it closed. */
+  firstActionAt?: string | null;
+  resolvedAt?: string | null;
+}
+
+/**
+ * What the analytics endpoint returns, scoped to the reading officer.
+ *
+ * The two averages are null until something has reached that milestone,
+ * which is not the same as zero - a desk that has closed nothing has no
+ * resolution time, it does not have a resolution time of nought. The
+ * counts beside them say how many cases each average is built from.
+ */
+export interface AnalyticsSummary {
+  total: number;
+  byStatus: Record<TicketStatus, number>;
+  bySla: Record<SlaStatus, number>;
+  responseTime: {
+    averageFirstActionHours: number | null;
+    averageResolutionHours: number | null;
+    actedOn: number;
+    closed: number;
+  };
+  assignment: { assigned: number; unassigned: number };
+  generatedAt: string;
 }
 
 /**

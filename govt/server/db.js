@@ -53,6 +53,17 @@ CREATE INDEX IF NOT EXISTS idx_events_created ON activity_events(created_at DESC
 CREATE TABLE IF NOT EXISTS app_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 `);
 
+const ticketColumns = db.prepare('PRAGMA table_info(tickets)').all().map(column => column.name);
+if (!ticketColumns.includes('assigned_user_id')) {
+  db.exec('ALTER TABLE tickets ADD COLUMN assigned_user_id TEXT REFERENCES users(id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(assigned_user_id)');
+}
+// When a member of staff first acted, and when the case was closed. Both
+// are written once and never moved, so the response-time figures cannot
+// drift the way updated_at would.
+if (!ticketColumns.includes('first_action_at')) db.exec('ALTER TABLE tickets ADD COLUMN first_action_at TEXT');
+if (!ticketColumns.includes('resolved_at')) db.exec('ALTER TABLE tickets ADD COLUMN resolved_at TEXT');
+
 const roleColumns = db.prepare('PRAGMA table_info(roles)').all().map(column => column.name);
 if (!roleColumns.includes('access_level')) db.exec("ALTER TABLE roles ADD COLUMN access_level TEXT NOT NULL DEFAULT 'DIVISION_ADMIN'");
 
@@ -126,6 +137,9 @@ export const toTicket = row => {
     mobileNumber: row.mobile_number, wardId: row.ward_id, divisionId: row.division_id, category: row.category,
     status: row.status, slaStatus: row.sla_status, submissionTimestamp: row.submission_timestamp,
     slaDeadline: row.sla_deadline, ...(row.action_taken_report ? { actionTakenReport: row.action_taken_report } : {}),
+    assignedUserId: row.assigned_user_id ?? null,
+    firstActionAt: row.first_action_at ?? null,
+    resolvedAt: row.resolved_at ?? null,
   };
 };
 

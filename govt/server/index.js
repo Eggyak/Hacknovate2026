@@ -475,6 +475,13 @@ app.post('/api/tickets/:id/reply',requireAuth,requirePermission('tickets:read'),
   db.transaction(()=>{
     db.prepare('INSERT INTO ticket_replies(ticket_id,grievance_id,user_id,author_name,body) VALUES(?,?,?,?,?)')
       .run(current.id,current.grievance_id,req.user.id,req.user.name,body);
+    // Writing to the complainant is a human acting on the case, so it
+    // starts the clock the same way a status change does. Without this a
+    // desk that answers every case within the hour but changes the status
+    // later would score as if it had never responded.
+    if(!current.first_action_at){
+      db.prepare('UPDATE tickets SET first_action_at=? WHERE id=?').run(new Date().toISOString(),current.id);
+    }
     audit(req.user.id,'TICKET_REPLY',`${req.user.name} replied on ${current.grievance_id}.`,current.id);
   })();
 
@@ -554,8 +561,66 @@ app.patch('/api/tickets/:id',requireAuth,(req,res)=>{
   if(status==='PENDING'&&status!==current.status&&!req.role.permissions.includes('tickets:reroute'))return res.status(403).json({error:'The tickets:reroute permission is required.'});
   if(report!==undefined&&report.length>5000)return res.status(400).json({error:'Action report must be under 5,000 characters.'});
   if(report!==undefined&&!req.role.permissions.includes('tickets:resolve'))return res.status(403).json({error:'The tickets:resolve permission is required to add an official report.'});
+  /*
+   * Assignment, which is separate from status.
+   *
+   * A case belongs to a desk by division and ward; this names the officer
+   * who owns it. Only somebody who can already act on the case may hand it
+   * out, and only to an active account that could see it anyway - handing
+   * a case to an officer whose role cannot open it is how work disappears.
+   */
+  let assignee;
+  if (req.body?.assignedUserId !== undefined) {
+    if (!req.role.permissions.includes('tickets:resolve') && !req.role.permissions.includes('tickets:reroute')) {
+      return res.status(403).json({ error: 'You do not have permission to assign cases.' });
+    }
+    const wanted = req.body.assignedUserId;
+    if (wanted === null || wanted === '') {
+      assignee = null;
+    } else {
+      const candidate = getUserById.get(String(wanted));
+      if (!candidate || !candidate.is_active) return res.status(400).json({ error: 'Choose an active member of staff.' });
+      const candidateRole = toRole(getRoleById.get(candidate.role_id));
+      if (!candidateRole) return res.status(400).json({ error: 'That account has no active role.' });
+      if (candidateRole.id !== 'ROLE-SUPER-ADMIN'
+        && candidateRole.divisionId
+        && candidateRole.divisionId !== current.division_id) {
+        return res.status(400).json({ error: 'That officer cannot open cases in this division.' });
+      }
+      assignee = candidate.id;
+    }
+  }
+
   const now=new Date().toISOString();
-  db.transaction(()=>{db.prepare('UPDATE tickets SET status=?,action_taken_report=COALESCE(?,action_taken_report),updated_at=? WHERE id=?').run(status,report??null,now,current.id);audit(req.user.id,'TICKET_UPDATED',`${current.grievance_id} updated to ${status}.`,current.id,{status,hasReport:Boolean(report)});})();
+  // The first time a human touches the case, and the moment it closes.
+  const firstAction = current.first_action_at ?? now;
+  const resolvedAt = status === 'RESOLVED'
+    ? (current.resolved_at ?? now)
+    : null;
+
+  db.transaction(()=>{
+    db.prepare(`UPDATE tickets
+                   SET status=?,
+                       action_taken_report=COALESCE(?,action_taken_report),
+                       assigned_user_id=COALESCE(?,assigned_user_id),
+                       first_action_at=?,
+                       resolved_at=?,
+                       updated_at=?
+                 WHERE id=?`)
+      .run(status, report??null, assignee===undefined?null:assignee, firstAction, resolvedAt, now, current.id);
+
+    // COALESCE cannot clear a column, so an explicit unassign is its own
+    // statement rather than a special null that the merge would ignore.
+    if (assignee === null) db.prepare('UPDATE tickets SET assigned_user_id=NULL WHERE id=?').run(current.id);
+
+    audit(req.user.id,'TICKET_UPDATED',`${current.grievance_id} updated to ${status}.`,current.id,{status,hasReport:Boolean(report)});
+    if (assignee !== undefined) {
+      const name = assignee ? (getUserById.get(assignee)?.name ?? 'an officer') : null;
+      audit(req.user.id, 'TICKET_ASSIGNED',
+        name ? `${current.grievance_id} assigned to ${name}.` : `${current.grievance_id} unassigned.`,
+        current.id, { assignedUserId: assignee });
+    }
+  })();
   res.json(ticketForRole(ticketById.get(current.id),req));
 });
 
@@ -622,7 +687,51 @@ app.post('/api/auth/recover-super-admin',rateLimit({windowMs:60*60*1000,limit:5,
 app.get('/api/analytics/summary',requireAuth,requirePermission('analytics:view'),(req,res)=>{
   const scope=ticketScope(req);const rows=db.prepare(`SELECT status,sla_status,COUNT(*) AS count FROM tickets${scope.sql} GROUP BY status,sla_status`).all(...scope.params);
   const byStatus={PENDING:0,UNDER_INVESTIGATION:0,RESOLVED:0};const bySla={ON_TIME:0,WARNING:0,OVERDUE:0};for(const r of rows){byStatus[r.status]+=r.count;bySla[r.sla_status]+=r.count;}
-  res.json({total:Object.values(byStatus).reduce((a,b)=>a+b,0),byStatus,bySla,generatedAt:new Date().toISOString()});
+
+  /*
+   * How long cases actually take, in this officer's own scope.
+   *
+   * Two separate figures, because they answer different complaints. Time to
+   * first action is how long somebody waited before any human looked;
+   * time to resolution is how long the whole thing took. A desk can be fast
+   * at the first and slow at the second, and averaging them together would
+   * hide exactly that.
+   *
+   * Averaged only over the cases that reached each milestone, with the
+   * sample size returned beside it. An average over three cases is not the
+   * same claim as one over three hundred, and the UI says which it is.
+   */
+  const timing=db.prepare(`SELECT
+      COUNT(first_action_at) AS acted,
+      COUNT(resolved_at)     AS closed,
+      AVG(CASE WHEN first_action_at IS NOT NULL
+               THEN (julianday(first_action_at) - julianday(submission_timestamp)) * 24 END) AS first_hours,
+      AVG(CASE WHEN resolved_at IS NOT NULL
+               THEN (julianday(resolved_at) - julianday(submission_timestamp)) * 24 END) AS resolve_hours
+    FROM tickets${scope.sql}`).get(...scope.params);
+
+  const round1=(value)=>value===null||value===undefined?null:Math.round(value*10)/10;
+
+  const assigned=db.prepare(`SELECT COUNT(*) AS n FROM tickets${scope.sql?scope.sql+' AND':' WHERE'} assigned_user_id IS NOT NULL`).get(...scope.params);
+
+  res.json({
+    total:Object.values(byStatus).reduce((a,b)=>a+b,0),
+    byStatus,
+    bySla,
+    responseTime:{
+      // Negative is impossible but a clock skew between two machines could
+      // produce it; clamped so the dashboard never shows "-3 hours".
+      averageFirstActionHours:round1(Math.max(0,timing.first_hours??0))||null,
+      averageResolutionHours:round1(Math.max(0,timing.resolve_hours??0))||null,
+      actedOn:timing.acted,
+      closed:timing.closed,
+    },
+    assignment:{
+      assigned:assigned.n,
+      unassigned:Object.values(byStatus).reduce((a,b)=>a+b,0)-assigned.n,
+    },
+    generatedAt:new Date().toISOString(),
+  });
 });
 app.get('/api/activity',requireAuth,requirePermission('analytics:view'),(req,res)=>res.json(scopedActivities(req)));
 
