@@ -937,24 +937,27 @@ async function runCoreFeatures() {
   check('and there is no way to name a different number',
     !JSON.stringify(options).includes('"to"'), 'no recipient field');
 
-  const asked = await apiA('/calls/request', { method: 'POST', body: { language: 'ta' } });
-  if (options.available) {
-    /*
-     * 201 when the dialler took it, 503 when it refused. Both are correct
-     * answers; what would be wrong is 201 with nobody coming, which is
-     * what "queued, the call will be placed shortly" used to say whatever
-     * happened.
-     */
-    check('a callback is either placed or honestly refused',
-      [201, 503].includes(asked.status) && Boolean(asked.data?.message),
-      `HTTP ${asked.status}: ${asked.data?.message || ''}`.slice(0, 90));
-    check('a refusal never claims the phone will ring',
-      asked.status === 201 || !/will ring/i.test(asked.data?.message || ''),
-      asked.data?.message || '');
-  } else {
+  /*
+   * The request endpoint is NOT exercised when callbacks are switched on.
+   *
+   * It would place a real telephone call, to a number made up by this
+   * suite. A test that dials phones is a bad test: it costs money, it
+   * rings a stranger if the number happens to belong to somebody, and it
+   * fails for reasons that have nothing to do with the code. The refusal
+   * path is safe to check and is checked; the happy path is somebody
+   * pressing the button.
+   */
+  if (!options.available) {
+    const asked = await apiA('/calls/request', { method: 'POST', body: { language: 'ta' } });
     check('callbacks refuse cleanly when not configured',
       asked.status === 503 && Boolean(asked.data?.message), `HTTP ${asked.status}`);
+  } else {
+    check('callbacks are configured, so the dialling path is left alone',
+      true, 'not exercised: it would ring a real phone');
   }
+
+  const forged = await fetch(`${BASE}/api/calls/dispatch/forged-token-that-does-not-exist`);
+  check('a forged token resolves to nothing to dial', forged.status === 404, `HTTP ${forged.status}`);
 
   const badToken = await fetch(`${BASE}/api/calls/audio/not-a-real-token`);
   check('an unknown call token yields no audio', badToken.status === 404, `HTTP ${badToken.status}`);
