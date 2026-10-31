@@ -30,9 +30,6 @@ import { divisionById } from '../data/divisions.js';
 import { fromEnglish } from './translate.js';
 import { synthesize } from './azureSpeech.js';
 
-/** How many callbacks one citizen may ask for in an hour. */
-const HOURLY_LIMIT = 3;
-
 export function configured() {
   // A dialler to hand the job to AND a number to dial from. Either one
   // missing means the button would queue a call nobody can place.
@@ -107,19 +104,6 @@ export async function requestCallback(citizen, languageCode) {
 
   if (!citizen.mobile) {
     return { ok: false, reason: 'no_number', message: 'Your account has no mobile number.' };
-  }
-
-  const recent = await query(
-    `SELECT COUNT(*)::int AS n FROM call_requests
-      WHERE citizen_id = $1 AND requested_at > NOW() - INTERVAL '1 hour'`,
-    [citizen.id],
-  );
-  if (recent.rows[0].n >= HOURLY_LIMIT) {
-    return {
-      ok: false,
-      reason: 'rate_limited',
-      message: `You can ask for ${HOURLY_LIMIT} calls an hour. Please try again later.`,
-    };
   }
 
   const latest = await query(
@@ -262,6 +246,51 @@ export async function dispatch(call) {
     await markCall(call.token, 'failed', { failure: err.message });
     return { ok: false, reason: err.message };
   }
+}
+
+/**
+ * The call this citizen currently has in flight, if any.
+ *
+ * Queued or placed, not yet finished and not yet expired - which is the
+ * only window in which stopping it means anything.
+ */
+export async function activeCall(citizenId) {
+  const r = await query(
+    `SELECT token, language, status, requested_at
+       FROM call_requests
+      WHERE citizen_id = $1
+        AND status IN ('queued','placed','answered')
+        AND expires_at > NOW()
+      ORDER BY requested_at DESC LIMIT 1`,
+    [citizenId],
+  );
+  return r.rows[0] || null;
+}
+
+/**
+ * Stops a call the citizen asked for.
+ *
+ * Scoped to the owner, so a token alone cannot cancel somebody else's
+ * call. Marking it is what does the work: the TwiML route reads the
+ * status when Twilio asks what to say, and a cancelled call is answered
+ * with a hangup instead of the status reading.
+ *
+ * That stops it before it connects, and ends it at the next TwiML fetch
+ * if it already has. It cannot reach into a call that is mid-sentence -
+ * doing that means asking Twilio to complete the call, which needs the
+ * account credentials this process deliberately does not hold.
+ */
+export async function cancelCall(citizenId, token) {
+  const r = await query(
+    `UPDATE call_requests
+        SET status = 'cancelled', cancelled_at = NOW()
+      WHERE citizen_id = $1
+        AND token = $2::text
+        AND status IN ('queued','placed','answered')
+      RETURNING token, status`,
+    [citizenId, String(token || '')],
+  );
+  return r.rows[0] || null;
 }
 
 /** Recent callbacks for this citizen, for the dashboard card. */

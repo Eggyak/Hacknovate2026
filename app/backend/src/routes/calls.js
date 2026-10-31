@@ -14,24 +14,32 @@ import { requireCitizen } from '../lib/auth.js';
 import { LANGUAGES } from '../data/languages.js';
 import {
   configured, requestCallback, callByToken, markCall, speakCall, dispatch, recentCalls,
+  activeCall, cancelCall,
 } from '../services/callback.js';
 import { env } from '../lib/env.js';
 
 export const callsRouter = Router();
 
 /*
- * Tight, and per IP rather than per account.
+ * A runaway guard, not a quota.
  *
- * The per-citizen ceiling lives in the service because that is the limit
- * that matters - three calls an hour to one number. This one is here to
- * stop a single machine queueing calls across many accounts.
+ * There is deliberately no per-citizen limit: somebody who cannot read
+ * the dashboard may well need to hear it more than once, and metering
+ * that is the wrong instinct for an accessibility feature.
+ *
+ * This ceiling is high enough that no person clicking a button can reach
+ * it - ten a minute, sustained for an hour - and exists only so a stuck
+ * script or a loop cannot run up a telephone bill unnoticed.
  */
 const requestLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  limit: 20,
+  limit: 600,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'rate_limited', message: 'Too many call requests. Try again later.' },
+  message: {
+    error: 'rate_limited',
+    message: 'That is far more calls than a person can ask for. Something is looping.',
+  },
 });
 
 /** Which languages the call can be taken in, and whether it is available. */
@@ -50,6 +58,8 @@ callsRouter.get('/options', requireCitizen, async (req, res, next) => {
       callsTo: req.citizen.mobile
         ? `+91 ${req.citizen.mobile.slice(0, 2)}••• ••${req.citizen.mobile.slice(-2)}`
         : null,
+      // What is in flight, so the card can offer to stop it.
+      active: await activeCall(req.citizen.id),
       recent: await recentCalls(req.citizen.id),
     });
   } catch (err) {
@@ -109,6 +119,37 @@ callsRouter.post('/request', requireCitizen, requestLimiter, async (req, res, ne
   }
 });
 
+/**
+ * Stop a call.
+ *
+ * Owned by the citizen it was placed for - a token on its own cannot
+ * cancel somebody else's. With no token it stops whatever is currently in
+ * flight, which is what the button on the dashboard means.
+ */
+callsRouter.post('/cancel', requireCitizen, async (req, res, next) => {
+  try {
+    const token = req.body?.token || (await activeCall(req.citizen.id))?.token;
+    if (!token) {
+      return res.status(404).json({ error: 'nothing_active', message: 'There is no call to stop.' });
+    }
+
+    const stopped = await cancelCall(req.citizen.id, token);
+    if (!stopped) {
+      return res.status(409).json({
+        error: 'not_stoppable',
+        message: 'That call has already finished.',
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: 'Stopped. If the phone is already ringing it will end when answered.',
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /* ------------------------------------------------------------------ *
  * Telephony side. No session, token only.
  * ------------------------------------------------------------------ */
@@ -135,6 +176,20 @@ callsRouter.all('/twiml/:token', async (req, res, next) => {
         '<?xml version="1.0" encoding="UTF-8"?>'
         + '<Response><Say language="en-IN">Sorry, this update has expired.'
         + ' Please request a new call from the portal.</Say></Response>',
+      );
+    }
+
+    /*
+     * A cancelled call is answered with a hangup.
+     *
+     * This is what makes the stop button mean something: Twilio asks what
+     * to say at the moment the call connects, and by then the citizen may
+     * have changed their mind. Reading the status to somebody who just
+     * pressed stop is worse than saying nothing.
+     */
+    if (call.status === 'cancelled') {
+      return res.send(
+        '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
       );
     }
 
@@ -177,6 +232,18 @@ callsRouter.get('/dispatch/:token', async (req, res, next) => {
   try {
     const call = await callByToken(req.params.token);
     if (!call) return res.status(404).json({ error: 'not_found' });
+
+    /*
+     * A cancelled call is never dialled.
+     *
+     * The TwiML route hangs up on one that has already connected, but
+     * stopping it before the phone rings is the outcome somebody pressing
+     * the button actually wants - and this is the last point where that
+     * is still possible.
+     */
+    if (call.status === 'cancelled') {
+      return res.status(409).json({ error: 'cancelled' });
+    }
 
     if (!env.callbacks?.from) {
       return res.status(503).json({ error: 'no_caller_id' });

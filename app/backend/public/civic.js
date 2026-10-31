@@ -659,6 +659,19 @@ export function callbackPanel(options, ctx) {
       }.</p>`
     : '';
 
+  /*
+   * A way out of anything in flight.
+   *
+   * Shown only while there is something to stop. A dead button beside a
+   * finished call is worse than no button: it invites a press that does
+   * nothing and teaches people the control is broken.
+   */
+  const stopButton = options.active
+    ? `<button class="btn ghost mt-2" id="callStop" style="width:100%">
+         Stop the call
+       </button>`
+    : '';
+
   return `
     <div class="card mb-4" id="callbackCard">
       <h3 class="mb-2">Hear your status</h3>
@@ -674,6 +687,7 @@ export function callbackPanel(options, ctx) {
       <button class="btn primary mt-2" id="callNow" style="width:100%">
         Call me now
       </button>
+      ${stopButton}
       ${lastLine}
       <p class="small muted mt-1" id="callResult"></p>
     </div>`;
@@ -699,9 +713,22 @@ export function wireCallback(ctx, onDone) {
     } catch (err) {
       if (result) result.textContent = err.message;
       ctx.toast(err.message, 'bad');
-      // Re-enabled only on failure: a queued call should not be asked for
-      // twice because the first one has not rung yet.
       button.disabled = false;
+    }
+  });
+
+  const stop = document.querySelector('#callStop');
+  if (!stop) return;
+
+  stop.addEventListener('click', async () => {
+    stop.disabled = true;
+    try {
+      const reply = await ctx.api.post('/calls/cancel', {});
+      ctx.toast(reply.message || 'Stopped.', 'good');
+      if (onDone) await onDone();
+    } catch (err) {
+      ctx.toast(err.message, 'bad');
+      stop.disabled = false;
     }
   });
 }

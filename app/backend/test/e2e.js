@@ -956,6 +956,10 @@ async function runCoreFeatures() {
       true, 'not exercised: it would ring a real phone');
   }
 
+  check('there is no per-citizen call quota',
+    !JSON.stringify(options).includes('calls an hour'),
+    'no quota advertised');
+
   const forged = await fetch(`${BASE}/api/calls/dispatch/forged-token-that-does-not-exist`);
   check('a forged token resolves to nothing to dial', forged.status === 404, `HTTP ${forged.status}`);
 
@@ -990,6 +994,28 @@ async function runCoreFeatures() {
   const afterResolve = await query('SELECT status FROM call_requests WHERE token = $1', [plantedToken]);
   check('resolving marks the call placed', afterResolve.rows[0]?.status === 'placed',
     String(afterResolve.rows[0]?.status));
+
+  /*
+   * Stopping a call, and what stopping it actually prevents.
+   *
+   * Not just "the row says cancelled" - the two things that would still
+   * ring somebody must both refuse: the resolver that hands a number to
+   * the dialler, and the TwiML that speaks once connected.
+   */
+  const stopped = await apiA('/calls/cancel', { method: 'POST', body: { token: plantedToken } });
+  check('an in-flight call can be stopped', stopped.status === 200, `HTTP ${stopped.status}`);
+
+  const afterStop = await fetch(`${BASE}/api/calls/dispatch/${plantedToken}`);
+  check('a stopped call is never handed to the dialler',
+    afterStop.status === 409, `HTTP ${afterStop.status}`);
+
+  const stoppedTwiml = await (await fetch(`${BASE}/api/calls/twiml/${plantedToken}`)).text();
+  check('a stopped call hangs up instead of reading the status',
+    stoppedTwiml.includes('<Hangup/>'), stoppedTwiml.slice(0, 70));
+
+  const stoppedTwice = await apiA('/calls/cancel', { method: 'POST', body: { token: plantedToken } });
+  check('stopping a finished call says so rather than pretending',
+    stoppedTwice.status === 409, `HTTP ${stoppedTwice.status}`);
 
   const spoken = await fetch(`${BASE}/api/calls/audio/${plantedToken}`);
   check('the call has audio to play', spoken.ok && Number(spoken.headers.get('content-length') || 1) > 0,
