@@ -10,6 +10,16 @@
  * fetched from our own server. Synthesis is proxied through the server.
  */
 
+import {
+  reportPanel,
+  supportPanel,
+  updatesPanel,
+  ratingPanel,
+  ratingNudge,
+  wireDetail,
+  viewNearby,
+} from './civic.js';
+
 const api = {
   async call(path, { method = 'GET', body, form } = {}) {
     const init = { method, credentials: 'same-origin', headers: {} };
@@ -547,6 +557,7 @@ function renderChrome() {
       ['#/', 'Dashboard'],
       ['#/new', 'Register'],
       ['#/grievances', 'My grievances'],
+      ['#/nearby', 'Nearby'],
       ['#/track', 'Track'],
     ];
     nav.innerHTML = items
@@ -1160,6 +1171,8 @@ async function viewDashboard() {
       <div class="stat"><div class="n tnum">${stats.resolved}</div><div class="k">Resolved</div></div>
       <div class="stat"><div class="n tnum" style="color:${stats.breached ? 'var(--danger)' : 'inherit'}">${stats.breached}</div><div class="k">Past due</div></div>
     </div>
+
+    ${ratingNudge(state.recent, civicCtx())}
 
     ${Number(stats.awaiting_forward) > 0 ? `
       <div class="notice warn mb-4">
@@ -2201,6 +2214,10 @@ async function viewDetail(reference) {
                    href="/api/grievances/${esc(g.reference_id)}/attachment/${a.id}">Open</a>
               </div>`).join('')}
           </div>` : ''}
+
+        ${reportPanel(g, civicCtx())}
+        ${updatesPanel(g, g.comments, civicCtx())}
+        ${ratingPanel(g, civicCtx())}
       </div>
 
       <div>
@@ -2215,6 +2232,8 @@ async function viewDetail(reference) {
               </li>`).join('')}
           </ul>
         </div>
+
+        ${supportPanel(g, civicCtx())}
 
         <div class="card">
           <h3 class="mb-3">Filing</h3>
@@ -2232,6 +2251,14 @@ async function viewDetail(reference) {
       </div>
     </div>
     </div>`);
+
+  /*
+   * Re-render the whole page after an update or a rating rather than
+   * patching it. Neither reply carries the stored comment row or the
+   * recomputed priority, and building either locally would mean showing
+   * something the server never said.
+   */
+  wireDetail(g, civicCtx(), () => viewDetail(reference));
 }
 
 function viewTrack() {
@@ -2375,6 +2402,17 @@ function viewProfile() {
 
 /* ---------- router ---------- */
 
+/**
+ * The helpers civic.js is given.
+ *
+ * Handed in rather than imported the other way round, so the dependency
+ * runs in one direction only: civic.js knows nothing about this file's
+ * state and cannot reach into it.
+ */
+function civicCtx() {
+  return { api, esc, fmtDate, fmtDateTime, toast, setView };
+}
+
 async function route() {
   const hash = location.hash || '#/';
 
@@ -2397,6 +2435,7 @@ async function route() {
     if (hash === '#/new') return await viewChat();
     if (hash === '#/chats') return await viewHistory();
     if (hash === '#/grievances') return await viewList();
+    if (hash === '#/nearby') return await viewNearby(civicCtx());
     if (hash === '#/track') return viewTrack();
     if (hash === '#/profile') return viewProfile();
     return await viewDashboard();

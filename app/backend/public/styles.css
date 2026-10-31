@@ -838,3 +838,54 @@ table.data tr.row:hover { background: var(--surface-2); cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ---------- Core Features: stars and the score meter ---------- */
+
+/*
+ * Sizes are in rem throughout, like everything else here, so the text-size
+ * control actually moves them. An earlier pass found 78 of 81 font sizes in
+ * px, which is why none of it responded.
+ */
+.stars {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.stars .star {
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--line);
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+.stars .star.on {
+  color: #f0a020;
+}
+
+.stars.pick .star {
+  cursor: pointer;
+  transition: transform 0.08s ease;
+}
+
+.stars.pick .star:hover,
+.stars.pick .star:focus-visible {
+  transform: scale(1.12);
+  outline: none;
+}
+
+/* A bar, not a chart: one number against one hundred. */
+.meter {
+  height: 0.4rem;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
