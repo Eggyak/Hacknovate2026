@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import {
-  createChallengeTable, accessKeyRequired, accessKeyValid,
+  createChallengeTable,
   issueChallenge, verifyChallenge, sweepChallenges, deliverCode,
 } from './staffAuth.js';
 import { join, resolve } from 'node:path';
@@ -103,17 +103,28 @@ app.post('/api/auth/initial-admin',rateLimit({windowMs:60*60*1000,limit:5,standa
 app.post('/api/auth/login',loginLimiter,async(req,res)=>{
   const email=String(req.body?.email??'').trim().toLowerCase();
   const password=String(req.body?.password??'');
-  const accessKey=String(req.body?.accessKey??'');
   if(email.length>254||password.length>200||!email||!password)return res.status(400).json({error:'Enter your department email and password.'});
-  if(accessKeyRequired()&&!accessKey)return res.status(400).json({error:'The departmental access key is required.',accessKeyRequired:true});
 
-  const keyOk=accessKeyValid(accessKey);
+  /*
+   * No departmental access key.
+   *
+   * It was a single shared secret typed by every officer, which is weak as
+   * a factor and strong as a way to lock a department out of its own
+   * workspace: it spreads, it never rotates, and nobody can remember who
+   * issued it. What identifies a member of staff is their own password and
+   * the one-time code sent to their account; what they may do is their
+   * role, administered in the workspace itself.
+   *
+   * It was also failing closed in exactly the wrong way - the same generic
+   * refusal as a wrong password, so a mistyped key looked like a forgotten
+   * one.
+   */
   const row=userByEmail.get(email);
   const dummy='$2b$10$3TtZ0N45oW2GLTtStTa/xOYKYmNdFK31yRqt6A3eAuR6wsHBmXOIG';
   // Always run the password comparison so the reply takes the same time
   // whether or not the account exists.
   const valid=bcrypt.compareSync(password,row?.password_hash??dummy);
-  if(!keyOk||!row||!row.is_active||!valid)return res.status(401).json({error:'Those sign-in details were not accepted.'});
+  if(!row||!row.is_active||!valid)return res.status(401).json({error:'Those sign-in details were not accepted.'});
 
   const role=toRole(getRoleById.get(row.role_id));
   if(!role)return res.status(403).json({error:'No active role is assigned to this account.'});
@@ -182,7 +193,9 @@ app.post('/api/auth/login/verify',loginLimiter,(req,res)=>{
 
 /** Does this deployment ask for an access key? The form needs to know. */
 app.get('/api/auth/policy',(_req,res)=>res.json({
-  accessKeyRequired:accessKeyRequired(),
+  // Kept in the response so an older client still parses it; the shared
+  // key is no longer a sign-in factor and this is always false.
+  accessKeyRequired:false,
   otpRequired:Boolean(process.env.N8N_OTP_WEBHOOK_URL),
 }));
 
@@ -261,7 +274,6 @@ app.get('/api/mobile/manifest',(_req,res)=>{
       // does not require a new build.
       steps:[
         {id:'credentials',endpoint:'POST /api/auth/login',fields:[
-          ...(accessKeyRequired()?[{key:'accessKey',label:'Departmental access key',type:'password',required:true,help:'Issued to your department separately. Not your password.'}]:[]),
           {key:'email',label:'Department email / Login ID',type:'email',required:true},
           {key:'password',label:'Password',type:'password',required:true},
         ]},
@@ -269,7 +281,7 @@ app.get('/api/mobile/manifest',(_req,res)=>{
           {key:'code',label:'One-time code',type:'otp',length:6,required:true,help:'Sent to the address on your staff record.'},
         ]}]:[]),
       ],
-      accessKeyRequired:accessKeyRequired(),
+      accessKeyRequired:false,
       otpRequired:Boolean(process.env.N8N_OTP_WEBHOOK_URL),
       session:{transport:'bearer',ttlSeconds:Math.round(sessionLifetime/1000),storage:'encrypted-prefs'},
       selfSignUp:false,

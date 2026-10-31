@@ -172,7 +172,7 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
   const [credentialNotice, setCredentialNotice] = useState<{ name: string; email: string; password: string } | null>(null);
   const [loginChallenge, setLoginChallenge] = useState<{ id: string; sentTo: string; expiresInSeconds: number } | null>(null);
-  const [accessKeyRequired, setAccessKeyRequired] = useState(true);
+
 
   // Active view navigation
   const [activeView, setActiveView] = useState<ActiveView>('dashboard');
@@ -288,8 +288,6 @@ export default function App() {
 
     // Whether this deployment asks for a departmental access key is the
     // server's decision, not the form's; ask rather than assume.
-    api<{ accessKeyRequired: boolean }>('/api/auth/policy')
-      .then((policy) => { if (active) setAccessKeyRequired(Boolean(policy.accessKeyRequired)); })
       .catch(() => {});
 
     Promise.all([api<{ user: User; role: Role }>('/api/auth/me'), api<{ needsInitialAdmin: boolean }>('/api/auth/setup-status')])
@@ -383,14 +381,14 @@ export default function App() {
    * the server replies with a challenge and sends a code to the address on
    * the staff record, so a leaked password alone reaches nothing.
    */
-  const signIn = async (email: string, password: string, accessKey: string) => {
+  const signIn = async (email: string, password: string) => {
     try {
       const result = await api<{
         otpRequired: boolean; challengeId: string; sentTo: string;
         expiresInSeconds: number; delivered: boolean; deliveryIssue: string | null;
       }>('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password, accessKey }),
+        body: JSON.stringify({ email, password }),
       });
 
       setLoginChallenge({
@@ -691,7 +689,6 @@ export default function App() {
       <SignInScreen
         setup={needsInitialAdmin}
         error={loginError}
-        accessKeyRequired={accessKeyRequired}
         challenge={loginChallenge}
         onSignIn={signIn}
         onVerify={verifySignIn}
@@ -1879,7 +1876,6 @@ export default function App() {
 function SignInScreen({
   setup,
   error,
-  accessKeyRequired,
   challenge,
   onSignIn,
   onVerify,
@@ -1889,9 +1885,8 @@ function SignInScreen({
 }: {
   setup: boolean;
   error: string;
-  accessKeyRequired: boolean;
   challenge: { id: string; sentTo: string; expiresInSeconds: number } | null;
-  onSignIn: (email: string, password: string, accessKey: string) => void;
+  onSignIn: (email: string, password: string) => void;
   onVerify: (code: string) => void;
   onRestart: () => void;
   onClearError: () => void;
@@ -1899,7 +1894,6 @@ function SignInScreen({
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [accessKey, setAccessKey] = useState('');
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [mobileNumber, setMobileNumber] = useState('');
@@ -1917,7 +1911,7 @@ function SignInScreen({
     } else if (challenge) {
       onVerify(code);
     } else {
-      onSignIn(email, password, accessKey);
+      onSignIn(email, password);
     }
   };
 
@@ -1981,26 +1975,6 @@ function SignInScreen({
             </>
           )}
 
-          {!challenge && !setup && accessKeyRequired && (
-            <label>
-              Departmental access key
-              <input
-                className="input"
-                type="password"
-                required
-                value={accessKey}
-                autoComplete="off"
-                onChange={(e) => {
-                  setAccessKey(e.target.value);
-                  onClearError();
-                }}
-                placeholder="Issued to your department separately"
-              />
-              <span className="field-hint">
-                Checked before your password. Not your password, and not sent by this portal.
-              </span>
-            </label>
-          )}
 
           {!challenge && (
             <label>
