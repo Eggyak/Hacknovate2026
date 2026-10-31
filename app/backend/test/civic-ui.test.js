@@ -22,6 +22,22 @@ const app = read('app.js');
 const civic = read('civic.js');
 const css = read('styles.css');
 
+/**
+ * The same sources with comments removed.
+ *
+ * Any guard that asserts something is ABSENT has to read this rather than
+ * the raw file. A comment explaining why a line was deleted contains that
+ * line, so the guard matches its own documentation and fails on code that
+ * is correct - which is exactly what happened the first time the
+ * invented-confidence check ran.
+ */
+const strip = (source) => source
+  .replace(/\/\*[\s\S]*?\*\//g, ' ')
+  .replace(/^\s*\/\/.*$/gm, ' ');
+
+const appCode = strip(app);
+const civicCode = strip(civic);
+
 test('the citizen can see the report that closed their case', () => {
   /*
    * The action-taken report is the answer the person has been waiting for,
@@ -118,7 +134,7 @@ test('civic.js does not reach into the app', () => {
    * that both renders panels and mutates the router is the thing this split
    * was meant to avoid.
    */
-  assert.ok(!/from '\.\/app\.js'/.test(civic), 'civic.js imports the app back');
+  assert.ok(!/from '\.\/app\.js'/.test(civicCode), 'civic.js imports the app back');
   assert.ok(!/\bstate\./.test(civic), "civic.js is touching the app's state directly");
 });
 
@@ -213,4 +229,32 @@ test('the heatmap is offered on the dashboard and the public page', () => {
     /Not a boundary map/.test(civic),
     'the caption that stops this being read as a border map is gone',
   );
+});
+
+test('dictation is read before it is sent', () => {
+  /*
+   * The microphone used to call sendMessage straight from Azure's final
+   * result, clearing the textarea on the way, so the citizen never saw
+   * what had been transcribed. Because an identified locale moves the
+   * conversation's language, a single mis-heard sentence switched the
+   * whole bot before anyone could object.
+   */
+  assert.ok(
+    !/onFinal[\s\S]{0,400}?await sendMessage\(/.test(appCode),
+    'the microphone is sending again without the words being seen',
+  );
+  assert.ok(/state\.pendingSpoken/.test(app), 'the heard locale is not held for send');
+  assert.ok(/say\.value = text/.test(app), 'the transcript is not put in the box');
+});
+
+test('no confidence figure is invented for dictation', () => {
+  /*
+   * The old call sent `confidence: 0.9` with every utterance - a number
+   * nothing measured, on a field the server reads to decide whether a
+   * locale was really identified. Azure's own confidence is not surfaced
+   * by this wrapper, so the honest thing is to say `source: 'lid'` and
+   * claim no number at all.
+   */
+  assert.ok(!/confidence:\s*0\.9/.test(appCode), 'a made-up confidence is back');
+  assert.ok(/source: 'lid'/.test(app), 'the server cannot tell this was a real identification');
 });

@@ -1082,3 +1082,19 @@ table.data tr.row:hover { background: var(--surface-2); cursor: pointer; }
   min-width: 1.6rem;
   text-align: end;
 }
+
+/* ---------- Dictation preview ---------- */
+
+/*
+ * Sits between the conversation and the composer, so the language the
+ * microphone heard is read before Send is pressed rather than discovered
+ * afterwards from the bot's reply.
+ */
+.spoken-note {
+  display: block;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.78rem;
+  color: var(--ink-2, #5b6672);
+  background: var(--surface-2, #f7f8fa);
+  border-top: 1px solid var(--line);
+}

@@ -74,6 +74,16 @@ const state = {
    * probably does not.
    */
   fileAnonymously: false,
+  /*
+   * What the microphone heard, waiting to be sent.
+   *
+   * Dictation used to go straight to the server the instant Azure
+   * finalised, and the textarea was cleared on the way, so a citizen never
+   * saw what had been transcribed and the conversation could switch
+   * language before they had finished thinking. Now the words land in the
+   * box and this holds the locale that came with them until Send.
+   */
+  pendingSpoken: null,
 };
 
 /* ---------- small helpers ---------- */
@@ -1376,6 +1386,7 @@ async function viewChat() {
         <div class="chat">
           <div class="stream" id="stream" data-no-i18n></div>
           <div class="chips" id="chips"></div>
+          <div id="spokenPreview" hidden></div>
           <form class="composer" id="composer">
             <textarea id="say" rows="1" placeholder="Type here, or press the microphone"
                       aria-label="Your message"></textarea>
@@ -1424,11 +1435,40 @@ async function viewChat() {
   renderProgress(current);
   renderDetected(current);
 
-  $('#composer').onsubmit = (e) => {
+  $('#composer').onsubmit = async (e) => {
     e.preventDefault();
     const text = $('#say').value.trim();
-    if (text) sendMessage(text, 'text');
+    if (!text) return;
+
+    /*
+     * `source: 'lid'` and no invented confidence.
+     *
+     * This path really did identify the language - Azure chose it from a
+     * candidate list - so the server is allowed to act on it. The old code
+     * sent `confidence: 0.9`, a number nothing measured, which is the kind
+     * of figure that ends up in a chart one day.
+     */
+    const spoken = state.pendingSpoken
+      ? { ...state.pendingSpoken, source: 'lid' }
+      : null;
+    const audio = state.pendingAudio;
+
+    state.pendingSpoken = null;
+    state.pendingAudio = null;
+    renderSpokenPreview(null);
+
+    await sendMessage(text, spoken ? 'voice' : 'text', spoken);
+    if (audio) await uploadNarrativeAudio(audio);
   };
+
+  // Rewriting the answer by hand means it is no longer what was heard.
+  $('#say').addEventListener('input', () => {
+    if (state.pendingSpoken && !$('#say').value.trim()) {
+      state.pendingSpoken = null;
+      state.pendingAudio = null;
+      renderSpokenPreview(null);
+    }
+  });
 
   const say = $('#say');
   say.oninput = () => {
@@ -2096,6 +2136,32 @@ async function uploadNarrativeAudio(blob) {
   }
 }
 
+/**
+ * Says which language the microphone heard, before anything is sent.
+ *
+ * The point of holding the transcript back is that it can be checked, and
+ * the language is the part most worth checking - it decides which language
+ * the bot answers in for the rest of the interview.
+ */
+function renderSpokenPreview(locale) {
+  const host = $('#spokenPreview');
+  if (!host) return;
+
+  if (!locale) {
+    host.innerHTML = '';
+    host.hidden = true;
+    return;
+  }
+
+  const lang = langOf(String(locale).split('-')[0]);
+  host.hidden = false;
+  host.innerHTML = `
+    <span class="spoken-note">
+      Heard in <b>${esc(lang?.native || lang?.name || locale)}</b>.
+      Check it, then press Send.
+    </span>`;
+}
+
 function wireMic() {
   const mic = $('#mic');
   if (!speech.available()) {
@@ -2123,13 +2189,23 @@ function wireMic() {
         onPartial: (text) => { say.value = text; },
         onFinal: async ({ text, locale, candidates }) => {
           speech.stop();
-          const blob = await speech.stopCapture();
+          state.pendingAudio = await speech.stopCapture();
           mic.classList.remove('rec');
-          mic.classList.add('busy');
-          say.value = '';
-          await sendMessage(text, 'voice', { locale, candidates, confidence: 0.9 });
-          if (blob) await uploadNarrativeAudio(blob);
-          mic.classList.remove('busy');
+
+          /*
+           * Transcribed, not sent.
+           *
+           * The words go in the box so they can be read, corrected and
+           * sent deliberately. Sending on Azure's final result meant a
+           * mis-heard sentence was already a turn in the interview - and
+           * because a spoken locale moves the conversation's language,
+           * one bad reading switched the whole bot before anybody could
+           * object.
+           */
+          say.value = text;
+          say.focus();
+          state.pendingSpoken = locale ? { locale, candidates } : null;
+          renderSpokenPreview(locale);
         },
         onError: (err) => {
           mic.classList.remove('rec', 'busy');
