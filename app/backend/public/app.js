@@ -18,6 +18,8 @@ import {
   ratingNudge,
   wireDetail,
   viewNearby,
+  heatmapPanel,
+  loadHeatmap,
 } from './civic.js';
 
 const api = {
@@ -1147,9 +1149,12 @@ const RECENT_COLLAPSED = 4;
 async function viewDashboard() {
   setView('<div class="center" style="padding:60px 0"><span class="spin dark"></span></div>');
 
-  const [stats, list] = await Promise.all([
+  // Three calls in one round trip rather than three in series: the
+  // dashboard should not take three times as long because it grew a panel.
+  const [stats, list, heat] = await Promise.all([
     api.get('/grievances/stats'),
     api.get('/grievances?limit=50'),
+    loadHeatmap(civicCtx()),
   ]);
 
   state.recent = list.grievances;
@@ -1180,7 +1185,20 @@ async function viewDashboard() {
         department desk yet. They are retried automatically; your docket number is unaffected.</span>
       </div>` : ''}
 
-    <div class="card mb-4">
+
+    <div class="home-split mb-4">
+      <div class="card">
+        <div class="row between wrap mb-3">
+          <h2>Recent cases</h2>
+          ${state.recent.length ? '<a class="small" href="#/grievances">Open full list</a>' : ''}
+        </div>
+        <div id="recentBody"></div>
+      </div>
+
+      ${heatmapPanel(heat, civicCtx(), { compact: false })}
+    </div>
+
+    <div class="card">
       <div class="row between wrap mb-3">
         <h2>Your details</h2>
         <a class="small" href="#/profile">Edit</a>
@@ -1215,14 +1233,6 @@ async function viewDashboard() {
             : '<a class="badge pending" href="#/profile" style="text-decoration:none">Needs details</a>'}</div>
         </div>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="row between wrap mb-3">
-        <h2>Recent cases</h2>
-        ${state.recent.length ? '<a class="small" href="#/grievances">Open full list</a>' : ''}
-      </div>
-      <div id="recentBody"></div>
     </div>`);
 
   renderRecent();

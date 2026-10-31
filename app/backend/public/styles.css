@@ -889,3 +889,90 @@ table.data tr.row:hover { background: var(--surface-2); cursor: pointer; }
   height: 100%;
   border-radius: 999px;
 }
+
+/* ---------- Heatmap ---------- */
+
+/*
+ * Five discrete bands rather than a gradient. A smooth ramp cannot be read
+ * back to a number by eye, and the point of this picture is to answer
+ * "which state is worst" without reading a table.
+ */
+.heat-card .heat-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+}
+
+.heat-svg {
+  width: 100%;
+  /* Keeps the tiles square-ish on a phone without letting the grid grow
+     taller than the card on a wide screen. */
+  max-width: 19rem;
+  height: auto;
+}
+
+.heat-tile rect {
+  fill: var(--surface-2, #eef1f4);
+  stroke: var(--line);
+  stroke-width: 0.5;
+}
+
+.heat-tile .heat-code {
+  font-size: 0.62rem;
+  font-weight: 700;
+  fill: var(--ink-2, #5b6672);
+}
+
+.heat-tile .heat-count {
+  font-size: 0.56rem;
+  font-weight: 700;
+  fill: var(--ink);
+}
+
+/* A state with nothing filed is drawn, not hidden: absence is information. */
+.heat-tile.heat-0 rect { fill: var(--surface-2, #eef1f4); }
+.heat-tile.heat-1 rect { fill: #dbeafe; stroke: #bfdbfe; }
+.heat-tile.heat-2 rect { fill: #bfdbfe; stroke: #93c5fd; }
+.heat-tile.heat-3 rect { fill: #fcd34d; stroke: #fbbf24; }
+.heat-tile.heat-4 rect { fill: #fb923c; stroke: #f97316; }
+.heat-tile.heat-5 rect { fill: #ef4444; stroke: #dc2626; }
+
+/* The hottest two bands need light text to stay legible. */
+.heat-tile.heat-4 .heat-code,
+.heat-tile.heat-5 .heat-code,
+.heat-tile.heat-4 .heat-count,
+.heat-tile.heat-5 .heat-count {
+  fill: #ffffff;
+}
+
+.heat-key {
+  display: inline-block;
+  width: 1.1rem;
+  height: 0.55rem;
+  border-radius: 3px;
+}
+
+.heat-key.heat-1 { background: #dbeafe; }
+.heat-key.heat-2 { background: #bfdbfe; }
+.heat-key.heat-3 { background: #fcd34d; }
+.heat-key.heat-4 { background: #fb923c; }
+.heat-key.heat-5 { background: #ef4444; }
+
+/*
+ * The dashboard's two-up row.
+ *
+ * Collapses to one column below 56rem, because side by side on a phone
+ * gives the heatmap about 9rem of width and the tiles stop being readable.
+ */
+.home-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 56rem) {
+  .home-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -274,10 +274,11 @@ export function wireDetail(g, ctx, reload) {
 export async function viewNearby(ctx) {
   ctx.setView('<div class="center" style="padding:60px 0"><span class="spin dark"></span></div>');
 
-  const [map, spots, board] = await Promise.all([
+  const [map, spots, board, heat] = await Promise.all([
     ctx.api.get('/civic/map').catch(() => ({ points: [] })),
     ctx.api.get('/civic/hotspots').catch(() => ({ hotspots: [] })),
     ctx.api.get('/civic/transparency').catch(() => ({ divisions: [] })),
+    loadHeatmap(ctx),
   ]);
 
   const points = map.points || [];
@@ -306,6 +307,8 @@ export async function viewNearby(ctx) {
       </div>
 
       ${map.note ? `<p class="small muted mb-4">${ctx.esc(map.note)}</p>` : ''}
+
+      <div class="mb-4">${heatmapPanel(heat, ctx, { compact: true })}</div>
 
       <div class="card mb-4">
         <h2 class="mb-3">Hotspots</h2>
@@ -426,4 +429,128 @@ export async function similarOffer(ctx, { text, divisionId, pincode }) {
           <div class="small muted">${ctx.esc((s.subject || s.translated_text || '').slice(0, 90))}</div>
         </div>`).join('')}
     </div>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Heatmap
+ * ------------------------------------------------------------------ */
+
+/**
+ * Where the states sit on the grid.
+ *
+ * A tile grid, not a map. Drawing real borders would mean shipping an
+ * outline of India and getting every boundary right - a disputed one drawn
+ * carelessly is worse than no map at all - for a picture whose only job is
+ * "which states are busy". Each state is one square in roughly its real
+ * position, so the shape of the country is recognisable and no border is
+ * claimed. Newspapers have used this for years for the same reason.
+ *
+ * Codes match data/states.js on the server, which is also what the heatmap
+ * endpoint returns, so nothing here has to map names to places.
+ */
+const STATE_GRID = [
+  ['JK', 1, 0],
+  ['PB', 1, 1], ['CH', 2, 1], ['HP', 3, 1], ['UK', 4, 1],
+  ['RJ', 1, 2], ['HR', 2, 2], ['DL', 3, 2], ['NE', 5, 2], ['AS', 6, 2],
+  ['GJ', 0, 3], ['MP', 2, 3], ['UP', 3, 3], ['BR', 4, 3],
+  ['MH', 1, 4], ['CG', 2, 4], ['JH', 3, 4], ['WB', 4, 4],
+  ['TG', 2, 5], ['OR', 3, 5],
+  ['LD', 0, 6], ['KA', 1, 6], ['AP', 2, 6], ['AN', 4, 6],
+  ['KL', 1, 7], ['TN', 2, 7], ['PY', 3, 7],
+];
+
+const TILE = 34;
+const GAP = 4;
+
+/**
+ * Five steps, not a continuous ramp.
+ *
+ * A smooth gradient looks better and reads worse: nobody can tell 12 from
+ * 17 by shade. Banded, with the counts printed on the tiles, somebody can
+ * actually answer "which is worst" at a glance.
+ */
+function heatBand(count, busiest) {
+  if (count <= 0) return 0;
+  if (busiest <= 1) return 5;
+  return Math.max(1, Math.min(5, Math.ceil((count / busiest) * 5)));
+}
+
+/**
+ * The heatmap, as an inline SVG.
+ *
+ * No canvas and no charting library: 27 rounded squares and some text is
+ * less code than wiring up a dependency, and it inherits the page's own
+ * colours and text size.
+ */
+export function heatmapPanel(data, ctx, { compact = false } = {}) {
+  const states = data?.states || [];
+  const busiest = data?.busiest || 0;
+  const byCode = new Map(states.filter((s) => s.code).map((s) => [s.code, s]));
+
+  const cols = Math.max(...STATE_GRID.map(([, x]) => x)) + 1;
+  const rows = Math.max(...STATE_GRID.map(([, , y]) => y)) + 1;
+  const width = cols * (TILE + GAP);
+  const height = rows * (TILE + GAP);
+
+  const tiles = STATE_GRID.map(([code, x, y]) => {
+    const found = byCode.get(code);
+    const count = found ? found.total : 0;
+    const band = heatBand(count, busiest);
+    const label = found ? found.name : code;
+
+    return `
+      <g class="heat-tile heat-${band}">
+        <title>${ctx.esc(label)}: ${count} complaint(s)${found && found.overdue ? `, ${found.overdue} overdue` : ''}</title>
+        <rect x="${x * (TILE + GAP)}" y="${y * (TILE + GAP)}"
+              width="${TILE}" height="${TILE}" rx="7" />
+        <text x="${x * (TILE + GAP) + TILE / 2}" y="${y * (TILE + GAP) + TILE / 2 - 1}"
+              text-anchor="middle" class="heat-code">${code}</text>
+        ${count > 0 ? `
+          <text x="${x * (TILE + GAP) + TILE / 2}" y="${y * (TILE + GAP) + TILE - 7}"
+                text-anchor="middle" class="heat-count">${count}</text>` : ''}
+      </g>`;
+  }).join('');
+
+  const legend = [1, 2, 3, 4, 5]
+    .map((band) => `<span class="heat-key heat-${band}"></span>`)
+    .join('');
+
+  return `
+    <div class="card heat-card">
+      <div class="row between wrap mb-2">
+        <div>
+          <h3 style="margin:0">Complaint heatmap</h3>
+          <p class="small muted" style="margin:2px 0 0">
+            ${data?.total ? `${data.total} complaint(s) across ${states.length} state(s)`
+              : 'No complaints have been filed with a location yet.'}
+          </p>
+        </div>
+        ${!compact ? '<a class="small" href="#/nearby">Open the public board</a>' : ''}
+      </div>
+
+      <div class="heat-wrap">
+        <svg viewBox="0 0 ${width} ${height}" class="heat-svg" role="img"
+             aria-label="Complaints by state, as a grid of tiles">
+          ${tiles}
+        </svg>
+      </div>
+
+      <div class="row between wrap mt-2">
+        <div class="row" style="gap:6px;align-items:center">
+          <span class="small muted">Fewer</span>
+          ${legend}
+          <span class="small muted">More</span>
+        </div>
+        <span class="small muted">One tile per state, placed roughly. Not a boundary map.</span>
+      </div>
+    </div>`;
+}
+
+/** Fetches the heatmap. An empty one still renders, so failure is quiet. */
+export async function loadHeatmap(ctx, params = '') {
+  try {
+    return await ctx.api.get(`/civic/heatmap${params}`);
+  } catch {
+    return { states: [], busiest: 0, total: 0 };
+  }
 }

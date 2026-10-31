@@ -18,6 +18,7 @@ import {
 } from './civicRules.js';
 import { env } from '../lib/env.js';
 import { divisionById } from '../data/divisions.js';
+import { STATES } from '../data/states.js';
 
 // Re-exported so callers import one module, not two.
 export { PRIORITY, PRIORITY_LABEL, scorePriority, clusterSignature };
@@ -434,4 +435,66 @@ export async function transparency() {
       transparencyScore: Math.max(0, Math.min(100, score)),
     };
   });
+}
+
+/**
+ * Complaint density by state, for the heatmap.
+ *
+ * Grouped by state rather than by coordinate because that is the only
+ * geography this data reliably has. A pincode resolves to a state for every
+ * complaint; latitude and longitude are optional and most filings never pin
+ * a location, so a coordinate heatmap would be drawn from the small subset
+ * of people who happened to share their position - and would read as if the
+ * rest of the country had no complaints.
+ *
+ * `state` on the row is the state's display name, which is what the
+ * interview stored. It is mapped back to a code here so the client can
+ * place each one without carrying its own copy of the table.
+ */
+export async function heatmap({ divisionId = null, days = null } = {}) {
+  const where = ['state IS NOT NULL'];
+  const params = [];
+
+  if (divisionId) {
+    params.push(divisionId);
+    where.push(`division_id = $${params.length}`);
+  }
+  if (days) {
+    params.push(Math.min(Number(days) || 365, 3650));
+    where.push(`submitted_at > NOW() - ($${params.length} || ' days')::interval`);
+  }
+
+  const r = await query(
+    `SELECT state,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE status IN ('resolved','closed'))::int AS resolved,
+            COUNT(*) FILTER (WHERE status NOT IN ('resolved','closed','rejected')
+                               AND sla_deadline < NOW())::int AS overdue
+       FROM grievances
+      WHERE ${where.join(' AND ')}
+      GROUP BY state`,
+    params,
+  );
+
+  const byName = new Map(STATES.map((s) => [s.name, s]));
+
+  const states = r.rows.map((row) => {
+    const match = byName.get(row.state);
+    return {
+      code: match ? match.code : null,
+      name: row.state,
+      total: row.total,
+      resolved: row.resolved,
+      overdue: row.overdue,
+      open: row.total - row.resolved,
+    };
+  });
+
+  return {
+    states,
+    // The client scales its colour ramp against this rather than picking
+    // its own ceiling, so two charts drawn minutes apart stay comparable.
+    busiest: states.reduce((most, s) => Math.max(most, s.total), 0),
+    total: states.reduce((sum, s) => sum + s.total, 0),
+  };
 }

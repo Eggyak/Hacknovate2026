@@ -876,6 +876,25 @@ async function runCoreFeatures() {
   check('the transparency board scores the division', Boolean(cyber) && typeof cyber.transparencyScore === 'number',
     cyber ? `score ${cyber.transparencyScore}, avg rating ${cyber.averageRating}` : 'missing');
 
+  /*
+   * The heatmap, hit for real.
+   *
+   * A route can import nothing it needs and still pass `node --check` and
+   * still load cleanly - the undefined name only bites when somebody calls
+   * it. That happened here: the handler was added and `heatmap` was left
+   * out of the import list, which is a 500 that nothing else would have
+   * caught until a citizen opened the page.
+   */
+  const heat = await (await fetch(`${BASE}/api/civic/heatmap`)).json();
+  check('the heatmap answers', Array.isArray(heat.states), JSON.stringify(heat).slice(0, 80));
+  check('the heatmap counts the two reports',
+    heat.total >= 2, `total ${heat.total}`);
+  check('the heatmap resolves a state code',
+    (heat.states || []).every((st) => st.code === null || /^[A-Z]{2}$/.test(st.code)),
+    (heat.states || []).map((st) => `${st.code}:${st.total}`).join(' ') || 'none');
+  check('the heatmap leaks no identity',
+    !JSON.stringify(heat).match(/mobile|email|citizen_id|original_text/i), 'clean');
+
   await query('DELETE FROM citizens WHERE id = ANY($1)', [[a.citizen.id, b.citizen.id]]);
 }
 

@@ -19,7 +19,7 @@ import { requireCitizen } from '../lib/auth.js';
 import { query } from '../lib/db.js';
 import {
   support, withdrawSupport, addComment, listComments, rate,
-  publicMap, hotspots, transparency, findSimilar, PRIORITY_LABEL,
+  publicMap, hotspots, heatmap, transparency, findSimilar, PRIORITY_LABEL,
 } from '../services/civic.js';
 import { classify } from '../services/classifier.js';
 
@@ -49,6 +49,26 @@ civicRouter.get('/map', publicLimiter, async (req, res, next) => {
 civicRouter.get('/hotspots', publicLimiter, async (req, res, next) => {
   try {
     res.json({ hotspots: await hotspots({ limit: req.query.limit }) });
+  } catch (err) { next(err); }
+});
+
+/**
+ * Complaint density by state.
+ *
+ * Public, like the map and the board beside it: a heatmap of where
+ * complaints are coming from identifies no one. It carries counts and a
+ * state name, nothing else.
+ */
+civicRouter.get('/heatmap', publicLimiter, async (req, res, next) => {
+  try {
+    const data = await heatmap({
+      divisionId: req.query.divisionId || null,
+      days: req.query.days || null,
+    });
+    res.json({
+      ...data,
+      note: 'Grouped by state from the complaint pincode. No identities and no complaint text.',
+    });
   } catch (err) { next(err); }
 });
 
